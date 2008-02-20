@@ -2368,11 +2368,6 @@ public:
   
   virtual GetResultInst *clone() const;
   
-  // getType - Get aggregate value element type
-  inline const Type *getType() const {
-    return Aggr->getType();
-  }
-  
   inline Value *getAggregateValue() {
     return getOperand(0);
   }
