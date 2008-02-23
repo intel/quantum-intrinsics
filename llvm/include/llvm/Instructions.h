@@ -2376,7 +2376,11 @@ public:
     return getOperand(0);
   }
 
-  unsigned getIndex() {
+  inline unsigned getIndex() {
+    return Idx;
+  }
+
+  inline const unsigned getIndex() const {
     return Idx;
   }
 
