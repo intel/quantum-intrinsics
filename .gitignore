@@ -32,6 +32,8 @@ IntelQuantum/QuantumPasses/tests/**/Output/
 *~
 # Merge files created by git.
 *.orig
+# Reject files created by patch.
+*.rej
 # Byte compiled python modules.
 *.pyc
 # vim swap files
