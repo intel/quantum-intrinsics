@@ -1,39 +1,30 @@
-# The LLVM Compiler Infrastructure
+# Intel (R) Quantum Intrinsics
 
-Welcome to the LLVM project!
+This repository builds C++ based frontend for the Intel Quantum Compiler.  It is used in conjunction with the [Intel Quantum Passes](https://github.com/intel/quantum-passes).  It adapts the clang and LLVM compiler to use Quantum Intrinsics, and includes several header files with specific quantum libraries and functions.
 
-This repository contains the source code for LLVM, a toolkit for the
-construction of highly optimized compilers, optimizers, and run-time
-environments.
+## Building the Tools
+Building the compiler is very similar to standard LLVM, and requires the same software, found [here](https://llvm.org/docs/GettingStarted.html#software).
 
-The LLVM project has multiple components. The core of the project is
-itself called "LLVM". This contains all of the tools, libraries, and header
-files needed to process intermediate representations and convert them into
-object files. Tools include an assembler, disassembler, bitcode analyzer, and
-bitcode optimizer.
+After ensuring the system requirements are met, use the following commands:
+```
+mkdir build
+cd build
+cmake -G Ninja -S ../llvm -B . -DLLVM_INSTALL_UTILS=ON -DCMAKE_INSTALL_PREFIX=<iqc_install_dir> -DLLVM_ENABLE_PROJECTS="clang;lld" -DCMAKE_BUILD_TYPE=Release
+ninja -C . install
+```
 
-C-like languages use the [Clang](http://clang.llvm.org/) frontend. This
-component compiles C, C++, Objective-C, and Objective-C++ code into LLVM bitcode
--- and from there into object files, using LLVM.
+`<iqc_install_dir>` is the location where you want IQC to be installed.  If it is not specified, it will attempt to be installed to `/usr/bin`.  If you do not want to install the compiler anywhere, simply use the command `ninja -C .` instead.
 
-Other components include:
-the [libc++ C++ standard library](https://libcxx.llvm.org),
-the [LLD linker](https://lld.llvm.org), and more.
+## Information for Developers
+Much of the information that's helpful to use and develop with LLVM is helpful for our compiler as well, but this is some frequently useful advice.
 
-## Getting the Source Code and Building LLVM
+### Debugging
+In order to to get full debug information and assertions, pass the `-DCMAKE_BUILD_TYPE=Debug` rather than `Release`.
 
-Consult the
-[Getting Started with LLVM](https://llvm.org/docs/GettingStarted.html#getting-the-source-code-and-building-llvm)
-page for information on building and running LLVM.
+In order to get "print debugging" for LLVM classes through the `.dump()` method, include `-DLLVM_ENABLE_DUMP=On` to the cmake invocation.
 
-For information on how to contribute to the LLVM project, please take a look at
-the [Contributing to LLVM](https://llvm.org/docs/Contributing.html) guide.
+### Intrinsics
+If you find you need to generate your own intrinsics, the TableGen files for these can be found in `llvm/include/llvm/IR/IntrinsicsQuantum.td`.
 
-## Getting in touch
-
-Join the [LLVM Discourse forums](https://discourse.llvm.org/), [Discord
-chat](https://discord.gg/xS7Z362), or #llvm IRC channel on
-[OFTC](https://oftc.net/).
-
-The LLVM project has adopted a [code of conduct](https://llvm.org/docs/CodeOfConduct.html) for
-participants to all modes of communication within the project.
+### Header File and Quantum Library
+If you find you need to add to the library of quantum functions, they can be found in `clang/include/Quantum`.  The same conventions can be used, mainly the use of the `noinline` and the `.qbbs_text` attributes.  These attributes ensure that the functions are not improperly inlined, which can cause problems later on in the compilation process. 
