@@ -45,6 +45,9 @@ ThreadModel::Model getThreadModel();
 CodeModel::Model getCodeModel();
 std::optional<CodeModel::Model> getExplicitCodeModel();
 
+uint64_t getLargeDataThreshold();
+std::optional<uint64_t> getExplicitLargeDataThreshold();
+
 llvm::ExceptionHandling getExceptionModel();
 
 std::optional<CodeGenFileType> getExplicitFileType();
@@ -93,6 +96,8 @@ bool getStackRealign();
 std::string getTrapFuncName();
 
 bool getUseCtors();
+
+bool getDisableIntegratedAS();
 
 bool getRelaxELFRelocations();
 

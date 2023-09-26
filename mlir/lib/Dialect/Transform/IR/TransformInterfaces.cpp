@@ -45,7 +45,8 @@ transform::TransformState::TransformState(
   for (ArrayRef<MappedValue> mapping : extraMappings)
     topLevelMappedValues.push_back(mapping);
 
-  auto result = mappings.insert(std::make_pair(region, Mappings()));
+  auto result =
+      mappings.insert(std::make_pair(region, std::make_unique<Mappings>()));
   assert(result.second && "the region scope is already present");
   (void)result;
 #if LLVM_ENABLE_ABI_BREAKING_CHECKS
@@ -74,7 +75,7 @@ ArrayRef<Attribute> transform::TransformState::getParams(Value value) const {
 }
 
 ArrayRef<Value>
-transform::TransformState::getPayloadValues(Value handleValue) const {
+transform::TransformState::getPayloadValuesView(Value handleValue) const {
   const ValueMapping &mapping = getMapping(handleValue).values;
   auto iter = mapping.find(handleValue);
   assert(iter != mapping.end() && "cannot find mapping for value handle "
@@ -87,8 +88,8 @@ LogicalResult transform::TransformState::getHandlesForPayloadOp(
     bool includeOutOfScope) const {
   bool found = false;
   for (const auto &[region, mapping] : llvm::reverse(mappings)) {
-    auto iterator = mapping.reverse.find(op);
-    if (iterator != mapping.reverse.end()) {
+    auto iterator = mapping->reverse.find(op);
+    if (iterator != mapping->reverse.end()) {
       llvm::append_range(handles, iterator->getSecond());
       found = true;
     }
@@ -106,8 +107,8 @@ LogicalResult transform::TransformState::getHandlesForPayloadValue(
     bool includeOutOfScope) const {
   bool found = false;
   for (const auto &[region, mapping] : llvm::reverse(mappings)) {
-    auto iterator = mapping.reverseValues.find(payloadValue);
-    if (iterator != mapping.reverseValues.end()) {
+    auto iterator = mapping->reverseValues.find(payloadValue);
+    if (iterator != mapping->reverseValues.end()) {
       llvm::append_range(handles, iterator->getSecond());
       found = true;
     }
@@ -309,6 +310,11 @@ void transform::TransformState::forgetMapping(Value opHandle,
   for (Operation *op : mappings.direct[opHandle])
     dropMappingEntry(mappings.reverse, op, opHandle);
   mappings.direct.erase(opHandle);
+#ifdef LLVM_ENABLE_ABI_BREAKING_CHECKS
+  // Payload IR is removed from the mapping. This invalidates the respective
+  // iterators.
+  mappings.incrementTimestamp(opHandle);
+#endif // LLVM_ENABLE_ABI_BREAKING_CHECKS
 
   for (Value opResult : origOpFlatResults) {
     SmallVector<Value> resultHandles;
@@ -316,6 +322,11 @@ void transform::TransformState::forgetMapping(Value opHandle,
     for (Value resultHandle : resultHandles) {
       Mappings &localMappings = getMapping(resultHandle);
       dropMappingEntry(localMappings.values, resultHandle, opResult);
+#ifdef LLVM_ENABLE_ABI_BREAKING_CHECKS
+      // Payload IR is removed from the mapping. This invalidates the respective
+      // iterators.
+      mappings.incrementTimestamp(resultHandle);
+#endif // LLVM_ENABLE_ABI_BREAKING_CHECKS
       dropMappingEntry(localMappings.reverseValues, opResult, resultHandle);
     }
   }
@@ -327,6 +338,11 @@ void transform::TransformState::forgetValueMapping(
   for (Value payloadValue : mappings.reverseValues[valueHandle])
     dropMappingEntry(mappings.reverseValues, payloadValue, valueHandle);
   mappings.values.erase(valueHandle);
+#ifdef LLVM_ENABLE_ABI_BREAKING_CHECKS
+  // Payload IR is removed from the mapping. This invalidates the respective
+  // iterators.
+  mappings.incrementTimestamp(valueHandle);
+#endif // LLVM_ENABLE_ABI_BREAKING_CHECKS
 
   for (Operation *payloadOp : payloadOperations) {
     SmallVector<Value> opHandles;
@@ -335,6 +351,12 @@ void transform::TransformState::forgetValueMapping(
       Mappings &localMappings = getMapping(opHandle);
       dropMappingEntry(localMappings.direct, opHandle, payloadOp);
       dropMappingEntry(localMappings.reverse, payloadOp, opHandle);
+
+#ifdef LLVM_ENABLE_ABI_BREAKING_CHECKS
+      // Payload IR is removed from the mapping. This invalidates the respective
+      // iterators.
+      localMappings.incrementTimestamp(opHandle);
+#endif // LLVM_ENABLE_ABI_BREAKING_CHECKS
     }
   }
 }
@@ -427,6 +449,11 @@ transform::TransformState::replacePayloadValue(Value value, Value replacement) {
     // between the handles and the IR objects
     if (!replacement) {
       dropMappingEntry(mappings.values, handle, value);
+#ifdef LLVM_ENABLE_ABI_BREAKING_CHECKS
+      // Payload IR is removed from the mapping. This invalidates the respective
+      // iterators.
+      mappings.incrementTimestamp(handle);
+#endif // LLVM_ENABLE_ABI_BREAKING_CHECKS
     } else {
       auto it = mappings.values.find(handle);
       if (it == mappings.values.end())
@@ -521,7 +548,9 @@ void transform::TransformState::recordValueHandleInvalidationByOpHandleOne(
   for (Operation *ancestor : potentialAncestors) {
     Operation *definingOp;
     std::optional<unsigned> resultNo;
-    unsigned argumentNo, blockNo, regionNo;
+    unsigned argumentNo = std::numeric_limits<unsigned>::max();
+    unsigned blockNo = std::numeric_limits<unsigned>::max();
+    unsigned regionNo = std::numeric_limits<unsigned>::max();
     if (auto opResult = llvm::dyn_cast<OpResult>(payloadValue)) {
       definingOp = opResult.getOwner();
       resultNo = opResult.getResultNumber();
@@ -609,7 +638,7 @@ void transform::TransformState::recordOpHandleInvalidation(
     // Go over all op handle mappings and mark as invalidated any handle
     // pointing to any of the payload ops associated with the given handle or
     // any op nested in them.
-    for (const auto &[payloadOp, otherHandles] : mapping.reverse) {
+    for (const auto &[payloadOp, otherHandles] : mapping->reverse) {
       for (Value otherHandle : otherHandles)
         recordOpHandleInvalidationOne(handle, potentialAncestors, payloadOp,
                                       otherHandle, throughValue,
@@ -620,7 +649,7 @@ void transform::TransformState::recordOpHandleInvalidation(
     // or any op nested in them. Similarly invalidate handles to argument of
     // blocks belonging to any region of any payload op associated with the
     // given handle or any op nested in them.
-    for (const auto &[payloadValue, valueHandles] : mapping.reverseValues) {
+    for (const auto &[payloadValue, valueHandles] : mapping->reverseValues) {
       for (Value valueHandle : valueHandles)
         recordValueHandleInvalidationByOpHandleOne(handle, potentialAncestors,
                                                    payloadValue, valueHandle,
@@ -633,7 +662,7 @@ void transform::TransformState::recordValueHandleInvalidation(
     OpOperand &valueHandle,
     transform::TransformState::InvalidatedHandleMap &newlyInvalidated) const {
   // Invalidate other handles to the same value.
-  for (Value payloadValue : getPayloadValues(valueHandle.get())) {
+  for (Value payloadValue : getPayloadValuesView(valueHandle.get())) {
     SmallVector<Value> otherValueHandles;
     (void)getHandlesForPayloadValue(payloadValue, otherValueHandles);
     for (Value otherHandle : otherValueHandles) {
@@ -771,6 +800,13 @@ checkRepeatedConsumptionInOperand(ArrayRef<T> payload,
 void transform::TransformState::compactOpHandles() {
   for (Value handle : opHandlesToCompact) {
     Mappings &mappings = getMapping(handle, /*allowOutOfScope=*/true);
+#ifdef LLVM_ENABLE_ABI_BREAKING_CHECKS
+    if (llvm::find(mappings.direct[handle], nullptr) !=
+        mappings.direct[handle].end())
+      // Payload IR is removed from the mapping. This invalidates the respective
+      // iterators.
+      mappings.incrementTimestamp(handle);
+#endif // LLVM_ENABLE_ABI_BREAKING_CHECKS
     llvm::erase_value(mappings.direct[handle], nullptr);
   }
   opHandlesToCompact.clear();
@@ -825,7 +861,7 @@ transform::TransformState::applyTransform(TransformOpInterface transform) {
         FULL_LDBG("--checkRepeatedConsumptionInOperand For Value\n");
         DiagnosedSilenceableFailure check =
             checkRepeatedConsumptionInOperand<Value>(
-                getPayloadValues(operand.get()), transform,
+                getPayloadValuesView(operand.get()), transform,
                 operand.getOperandNumber());
         if (!check.succeeded()) {
           FULL_LDBG("----FAILED\n");
@@ -840,8 +876,9 @@ transform::TransformState::applyTransform(TransformOpInterface transform) {
     // Cache Operation* -> OperationName mappings. These will be checked after
     // the transform has been applied to detect incorrect memory side effects
     // and missing op tracking.
-    for (Mappings &mapping : llvm::make_second_range(mappings)) {
-      for (Operation *op : llvm::make_first_range(mapping.reverse)) {
+    for (std::unique_ptr<Mappings> &mapping :
+         llvm::make_second_range(mappings)) {
+      for (Operation *op : llvm::make_first_range(mapping->reverse)) {
         auto insertion = cachedNames.insert({op, op->getName()});
         if (!insertion.second) {
           if (insertion.first->second != op->getName()) {
@@ -890,7 +927,7 @@ transform::TransformState::applyTransform(TransformOpInterface transform) {
       continue;
     }
     if (llvm::isa<TransformValueHandleTypeInterface>(operand.getType())) {
-      for (Value payloadValue : getPayloadValues(operand)) {
+      for (Value payloadValue : getPayloadValuesView(operand)) {
         if (llvm::isa<OpResult>(payloadValue)) {
           origAssociatedOps.push_back(payloadValue.getDefiningOp());
           continue;
@@ -991,8 +1028,9 @@ transform::TransformState::applyTransform(TransformOpInterface transform) {
     }
 
     // Check cached operation names.
-    for (Mappings &mapping : llvm::make_second_range(mappings)) {
-      for (Operation *op : llvm::make_first_range(mapping.reverse)) {
+    for (std::unique_ptr<Mappings> &mapping :
+         llvm::make_second_range(mappings)) {
+      for (Operation *op : llvm::make_first_range(mapping->reverse)) {
         // Make sure that the name of the op has not changed. If it has changed,
         // the op was removed and a new op was allocated at the same memory
         // location. This means that we are missing op tracking somewhere.
@@ -1104,7 +1142,7 @@ transform::TransformState::RegionScope::~RegionScope() {
   // Remember pointers to payload ops referenced by the handles going out of
   // scope.
   SmallVector<Operation *> referencedOps =
-      llvm::to_vector(llvm::make_first_range(state.mappings[region].reverse));
+      llvm::to_vector(llvm::make_first_range(state.mappings[region]->reverse));
 #endif // LLVM_ENABLE_ABI_BREAKING_CHECKS
 
   state.mappings.erase(region);
@@ -1145,19 +1183,6 @@ void transform::TransformResults::setParams(
   assert(values[position].data() == nullptr &&
          "another kind of results already set");
   this->params.replace(position, params);
-}
-
-void transform::TransformResults::setValues(OpResult handle,
-                                            ValueRange values) {
-  int64_t position = handle.getResultNumber();
-  assert(position < static_cast<int64_t>(this->values.size()) &&
-         "setting values for a non-existent handle");
-  assert(this->values[position].data() == nullptr && "values already set");
-  assert(operations[position].data() == nullptr &&
-         "another kind of results already set");
-  assert(params[position].data() == nullptr &&
-         "another kind of results already set");
-  this->values.replace(position, values);
 }
 
 void transform::TransformResults::setMappedValues(
@@ -1266,27 +1291,36 @@ Operation *transform::TrackingListener::getCommonDefiningOp(ValueRange values) {
   return defOp;
 }
 
-FailureOr<Operation *>
-transform::TrackingListener::findReplacementOp(Operation *op,
-                                               ValueRange newValues) const {
+DiagnosedSilenceableFailure transform::TrackingListener::findReplacementOp(
+    Operation *&result, Operation *op, ValueRange newValues) const {
   assert(op->getNumResults() == newValues.size() &&
          "invalid number of replacement values");
   SmallVector<Value> values(newValues.begin(), newValues.end());
 
+  DiagnosedSilenceableFailure diag = emitSilenceableFailure(
+      getTransformOp(), "tracking listener failed to find replacement op "
+                        "during application of this transform op");
+
   do {
     // If the replacement values belong to different ops, drop the mapping.
     Operation *defOp = getCommonDefiningOp(values);
-    if (!defOp)
-      return failure();
+    if (!defOp) {
+      diag.attachNote() << "replacement values belong to different ops";
+      return diag;
+    }
 
     // If the defining op has the same type, we take it as a replacement.
-    if (op->getName() == defOp->getName())
-      return defOp;
+    if (op->getName() == defOp->getName()) {
+      result = defOp;
+      return DiagnosedSilenceableFailure::success();
+    }
 
     // Replacing an op with a constant-like equivalent is a common
     // canonicalization.
-    if (defOp->hasTrait<OpTrait::ConstantLike>())
-      return defOp;
+    if (defOp->hasTrait<OpTrait::ConstantLike>()) {
+      result = defOp;
+      return DiagnosedSilenceableFailure::success();
+    }
 
     values.clear();
 
@@ -1294,17 +1328,22 @@ transform::TrackingListener::findReplacementOp(Operation *op,
     if (auto findReplacementOpInterface =
             dyn_cast<FindPayloadReplacementOpInterface>(defOp)) {
       values.assign(findReplacementOpInterface.getNextOperands());
+      diag.attachNote(defOp->getLoc()) << "using operands provided by "
+                                          "'FindPayloadReplacementOpInterface'";
       continue;
     }
 
     // Skip through ops that implement CastOpInterface.
     if (isa<CastOpInterface>(defOp)) {
       values.assign(defOp->getOperands().begin(), defOp->getOperands().end());
+      diag.attachNote(defOp->getLoc())
+          << "using output of 'CastOpInterface' op";
       continue;
     }
   } while (!values.empty());
 
-  return failure();
+  diag.attachNote() << "ran out of suitable replacement values";
+  return diag;
 }
 
 LogicalResult transform::TrackingListener::notifyMatchFailure(
@@ -1373,32 +1412,39 @@ void transform::TrackingListener::notifyOperationReplaced(
   };
 
   // Helper function to check if the handle is alive.
-  auto hasAliveUser = [&]() {
+  auto firstAliveUser = [&]() -> std::optional<OpOperand *> {
     for (Value v : opHandles) {
-      for (Operation *user : v.getUsers())
-        if (user != transformOp && !happensBefore(user, transformOp))
-          return true;
+      for (OpOperand &use : v.getUses())
+        if (use.getOwner() != transformOp &&
+            !happensBefore(use.getOwner(), transformOp))
+          return &use;
     }
-    return false;
-  };
+    return std::nullopt;
+  }();
 
-  if (!hasAliveUser() || handleWasConsumed()) {
+  if (!firstAliveUser.has_value() || handleWasConsumed()) {
     // The op is tracked but the corresponding handles are dead or were
     // consumed. Drop the op form the mapping.
     (void)replacePayloadOp(op, nullptr);
     return;
   }
 
-  FailureOr<Operation *> replacement = findReplacementOp(op, newValues);
+  Operation *replacement;
+  DiagnosedSilenceableFailure diag =
+      findReplacementOp(replacement, op, newValues);
   // If the op is tracked but no replacement op was found, send a
   // notification.
-  if (failed(replacement)) {
-    notifyPayloadReplacementNotFound(op, newValues);
+  if (!diag.succeeded()) {
+    diag.attachNote((*firstAliveUser)->getOwner()->getLoc())
+        << "replacement is required because alive handle(s) exist "
+        << "(first use in this op as operand number "
+        << (*firstAliveUser)->getOperandNumber() << ")";
+    notifyPayloadReplacementNotFound(op, newValues, std::move(diag));
     (void)replacePayloadOp(op, nullptr);
     return;
   }
 
-  (void)replacePayloadOp(op, *replacement);
+  (void)replacePayloadOp(op, replacement);
 }
 
 transform::ErrorCheckingTrackingListener::~ErrorCheckingTrackingListener() {
@@ -1421,17 +1467,20 @@ bool transform::ErrorCheckingTrackingListener::failed() const {
 }
 
 void transform::ErrorCheckingTrackingListener::notifyPayloadReplacementNotFound(
-    Operation *op, ValueRange values) {
-  if (status.succeeded()) {
-    status = emitSilenceableFailure(
-        getTransformOp(), "tracking listener failed to find replacement op");
-  }
+    Operation *op, ValueRange values, DiagnosedSilenceableFailure &&diag) {
 
+  // Merge potentially existing diags and store the result in the listener.
+  SmallVector<Diagnostic> diags;
+  diag.takeDiagnostics(diags);
+  if (!status.succeeded())
+    status.takeDiagnostics(diags);
+  status = DiagnosedSilenceableFailure::silenceableFailure(std::move(diags));
+
+  // Report more details.
   status.attachNote(op->getLoc()) << "[" << errorCounter << "] replaced op";
   for (auto &&[index, value] : llvm::enumerate(values))
     status.attachNote(value.getLoc())
         << "[" << errorCounter << "] replacement value " << index;
-
   ++errorCounter;
 }
 
@@ -1897,6 +1946,20 @@ void transform::modifiesPayload(
 void transform::onlyReadsPayload(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), PayloadIRResource::get());
+}
+
+bool transform::doesModifyPayload(transform::TransformOpInterface transform) {
+  auto iface = cast<MemoryEffectOpInterface>(transform.getOperation());
+  SmallVector<MemoryEffects::EffectInstance> effects;
+  iface.getEffects(effects);
+  return ::hasEffect<MemoryEffects::Write, PayloadIRResource>(effects);
+}
+
+bool transform::doesReadPayload(transform::TransformOpInterface transform) {
+  auto iface = cast<MemoryEffectOpInterface>(transform.getOperation());
+  SmallVector<MemoryEffects::EffectInstance> effects;
+  iface.getEffects(effects);
+  return ::hasEffect<MemoryEffects::Read, PayloadIRResource>(effects);
 }
 
 void transform::getConsumedBlockArguments(

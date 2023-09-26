@@ -265,9 +265,6 @@ def AMDGPUatomic_cmp_swap : SDNode<"AMDGPUISD::ATOMIC_CMP_SWAP",
                             [SDNPHasChain, SDNPMayStore, SDNPMayLoad,
                              SDNPMemOperand]>;
 
-def AMDGPUround : SDNode<"ISD::FROUND",
-                         SDTypeProfile<1, 1, [SDTCisFP<0>, SDTCisSameAs<0,1>]>>;
-
 def AMDGPUbfe_u32_impl : SDNode<"AMDGPUISD::BFE_U32", AMDGPUDTIntTernaryOp>;
 def AMDGPUbfe_i32_impl : SDNode<"AMDGPUISD::BFE_I32", AMDGPUDTIntTernaryOp>;
 def AMDGPUbfi : SDNode<"AMDGPUISD::BFI", AMDGPUDTIntTernaryOp>;
@@ -397,8 +394,7 @@ def AMDGPUlogf16 : PatFrags<(ops node:$src), [(int_amdgcn_log node:$src),
                                               (flog2 node:$src)]>;
 
 def AMDGPUexp : PatFrags<(ops node:$src), [(int_amdgcn_exp2 node:$src),
-                                           (AMDGPUexp_impl node:$src),
-                                           (fexp2 node:$src)]>; // FIXME: Remove me
+                                           (AMDGPUexp_impl node:$src)]>;
 def AMDGPUexpf16 : PatFrags<(ops node:$src), [(int_amdgcn_exp2 node:$src),
                                               (fexp2 node:$src)]>;
 

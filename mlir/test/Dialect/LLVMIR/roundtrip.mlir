@@ -329,8 +329,15 @@ func.func @alloca(%size : i64) {
 
 // CHECK-LABEL: @null
 func.func @null() {
-  // CHECK: llvm.mlir.null : !llvm.ptr
-  %0 = llvm.mlir.null : !llvm.ptr
+  // CHECK: llvm.mlir.zero : !llvm.ptr
+  %0 = llvm.mlir.zero : !llvm.ptr
+  llvm.return
+}
+
+// CHECK-LABEL: @zero
+func.func @zero() {
+  // CHECK: llvm.mlir.zero : i8
+  %0 = llvm.mlir.zero : i8
   llvm.return
 }
 
@@ -379,7 +386,7 @@ llvm.func @invokeLandingpad() -> i32 attributes { personality = @__gxx_personali
 // CHECK: %[[V0:.*]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK: %{{.*}} = llvm.mlir.constant(3 : i32) : i32
 // CHECK: %[[V1:.*]] = llvm.mlir.constant("\01") : !llvm.array<1 x i8>
-// CHECK: %[[V2:.*]] = llvm.mlir.null : !llvm.ptr
+// CHECK: %[[V2:.*]] = llvm.mlir.zero : !llvm.ptr
 // CHECK: %[[V3:.*]] = llvm.mlir.addressof @_ZTIi : !llvm.ptr
 // CHECK: %[[V4:.*]] = llvm.mlir.constant(1 : i32) : i32
 // CHECK: %[[V5:.*]] = llvm.alloca %[[V4]] x i8 : (i32) -> !llvm.ptr
@@ -387,7 +394,7 @@ llvm.func @invokeLandingpad() -> i32 attributes { personality = @__gxx_personali
   %0 = llvm.mlir.constant(0 : i32) : i32
   %1 = llvm.mlir.constant(3 : i32) : i32
   %2 = llvm.mlir.constant("\01") : !llvm.array<1 x i8>
-  %3 = llvm.mlir.null : !llvm.ptr
+  %3 = llvm.mlir.zero : !llvm.ptr
   %4 = llvm.mlir.addressof @_ZTIi : !llvm.ptr
   %5 = llvm.mlir.constant(1 : i32) : i32
   %6 = llvm.alloca %5 x i8 : (i32) -> !llvm.ptr
@@ -516,6 +523,10 @@ func.func @fastmathFlags(%arg0: f32, %arg1: f32, %arg2: i32, %arg3: vector<2 x f
   %13 = llvm.intr.vector.reduce.fmin(%arg3) {fastmathFlags = #llvm.fastmath<nnan>} : (vector<2xf32>) -> f32
 // CHECK: {{.*}} = llvm.intr.vector.reduce.fmax(%arg3) {fastmathFlags = #llvm.fastmath<nnan>} : (vector<2xf32>) -> f32
   %14 = llvm.intr.vector.reduce.fmax(%arg3) {fastmathFlags = #llvm.fastmath<nnan>} : (vector<2xf32>) -> f32
+// CHECK: {{.*}} = llvm.intr.vector.reduce.fminimum(%arg3) {fastmathFlags = #llvm.fastmath<nnan>} : (vector<2xf32>) -> f32
+  %15 = llvm.intr.vector.reduce.fminimum(%arg3) {fastmathFlags = #llvm.fastmath<nnan>} : (vector<2xf32>) -> f32
+// CHECK: {{.*}} = llvm.intr.vector.reduce.fmaximum(%arg3) {fastmathFlags = #llvm.fastmath<nnan>} : (vector<2xf32>) -> f32
+  %16 = llvm.intr.vector.reduce.fmaximum(%arg3) {fastmathFlags = #llvm.fastmath<nnan>} : (vector<2xf32>) -> f32
   return
 }
 
@@ -566,14 +577,12 @@ llvm.func @stackrestore(%arg0: !llvm.ptr)  {
   llvm.return
 }
 
+#alias_scope_domain = #llvm.alias_scope_domain<id = distinct[0]<>, description = "The domain">
+#alias_scope = #llvm.alias_scope<id = distinct[0]<>, domain = #alias_scope_domain, description = "The domain">
+
 // CHECK-LABEL: @experimental_noalias_scope_decl
 llvm.func @experimental_noalias_scope_decl() {
-  // CHECK: llvm.intr.experimental.noalias.scope.decl @metadata::@scope
-  llvm.intr.experimental.noalias.scope.decl @metadata::@scope
+  // CHECK: llvm.intr.experimental.noalias.scope.decl #{{.*}}
+  llvm.intr.experimental.noalias.scope.decl #alias_scope
   llvm.return
-}
-
-llvm.metadata @metadata {
-  llvm.alias_scope_domain @domain {description = "The domain"}
-  llvm.alias_scope @scope {domain = @domain, description = "The first scope"}
 }

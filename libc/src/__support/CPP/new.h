@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIBC_SRC_SUPPORT_CPP_NEW_H
-#define LLVM_LIBC_SRC_SUPPORT_CPP_NEW_H
+#ifndef LLVM_LIBC_SRC___SUPPORT_CPP_NEW_H
+#define LLVM_LIBC_SRC___SUPPORT_CPP_NEW_H
 
 #include "src/__support/common.h"
 
@@ -27,14 +27,16 @@ namespace __llvm_libc {
 
 class AllocChecker {
   bool success = false;
-  AllocChecker &operator=(bool status) {
+
+  LIBC_INLINE AllocChecker &operator=(bool status) {
     success = status;
     return *this;
   }
 
 public:
-  AllocChecker() = default;
-  operator bool() const { return success; }
+  LIBC_INLINE AllocChecker() = default;
+
+  LIBC_INLINE operator bool() const { return success; }
 
   LIBC_INLINE static void *alloc(size_t s, AllocChecker &ac) {
     void *mem = ::malloc(s);
@@ -97,4 +99,4 @@ void operator delete[](void *, size_t) noexcept
 void operator delete[](void *, size_t, std::align_val_t) noexcept
     __asm__("__llvm_libc_delete_array_sized_aligned");
 
-#endif // LLVM_LIBC_SRC_SUPPORT_CPP_NEW_H
+#endif // LLVM_LIBC_SRC___SUPPORT_CPP_NEW_H

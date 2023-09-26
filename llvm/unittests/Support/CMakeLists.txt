@@ -41,7 +41,6 @@ add_llvm_unittest(SupportTests
   ExtensibleRTTITest.cpp
   FileCollectorTest.cpp
   FileOutputBufferTest.cpp
-  FileUtilitiesTest.cpp
   FormatVariadicTest.cpp
   FSUniqueIDTest.cpp
   GlobPatternTest.cpp
@@ -75,6 +74,7 @@ add_llvm_unittest(SupportTests
   ScaledNumberTest.cpp
   ScopedPrinterTest.cpp
   SHA256.cpp
+  SignalsTest.cpp
   SourceMgrTest.cpp
   SpecialCaseListTest.cpp
   SuffixTreeTest.cpp

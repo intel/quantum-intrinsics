@@ -104,6 +104,14 @@ bool hlfir::isFortranScalarCharacterExprType(mlir::Type type) {
   return false;
 }
 
+bool hlfir::isFortranArrayCharacterExprType(mlir::Type type) {
+  if (auto exprType = mlir::dyn_cast<hlfir::ExprType>(type))
+    return exprType.isArray() &&
+           mlir::isa<fir::CharacterType>(exprType.getElementType());
+
+  return false;
+}
+
 bool hlfir::isFortranScalarNumericalType(mlir::Type type) {
   return fir::isa_integer(type) || fir::isa_real(type) ||
          fir::isa_complex(type);
@@ -173,6 +181,13 @@ bool hlfir::isMaskArgument(mlir::Type type) {
   return mlir::isa<fir::LogicalType>(elementType) || isI1Type(elementType);
 }
 
+bool hlfir::isPolymorphicObject(mlir::Type type) {
+  if (auto exprType = mlir::dyn_cast<hlfir::ExprType>(type))
+    return exprType.isPolymorphic();
+
+  return fir::isPolymorphicType(type);
+}
+
 mlir::Value hlfir::genExprShape(mlir::OpBuilder &builder,
                                 const mlir::Location &loc,
                                 const hlfir::ExprType &expr) {
@@ -191,4 +206,9 @@ mlir::Value hlfir::genExprShape(mlir::OpBuilder &builder,
       fir::ShapeType::get(builder.getContext(), expr.getRank());
   fir::ShapeOp shape = builder.create<fir::ShapeOp>(loc, shapeTy, extents);
   return shape.getResult();
+}
+
+bool hlfir::mayHaveAllocatableComponent(mlir::Type ty) {
+  return fir::isPolymorphicType(ty) || fir::isUnlimitedPolymorphicType(ty) ||
+         fir::isRecordWithAllocatableMember(hlfir::getFortranElementType(ty));
 }

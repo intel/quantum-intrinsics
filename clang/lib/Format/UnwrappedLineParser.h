@@ -125,8 +125,6 @@ private:
   void parseFile();
   bool precededByCommentOrPPDirective() const;
   bool parseLevel(const FormatToken *OpeningBrace = nullptr,
-                  bool CanContainBracedList = true,
-                  TokenType NextLBracesType = TT_Unknown,
                   IfStmtKind *IfKind = nullptr,
                   FormatToken **IfLeftBrace = nullptr);
   bool mightFitOnOneLine(UnwrappedLine &Line,
@@ -134,11 +132,8 @@ private:
   FormatToken *parseBlock(bool MustBeDeclaration = false,
                           unsigned AddLevels = 1u, bool MunchSemi = true,
                           bool KeepBraces = true, IfStmtKind *IfKind = nullptr,
-                          bool UnindentWhitesmithsBraces = false,
-                          bool CanContainBracedList = true,
-                          TokenType NextLBracesType = TT_Unknown);
-  void parseChildBlock(bool CanContainBracedList = true,
-                       TokenType NextLBracesType = TT_Unknown);
+                          bool UnindentWhitesmithsBraces = false);
+  void parseChildBlock();
   void parsePPDirective();
   void parsePPDefine();
   void parsePPIf(bool IfDef);
@@ -147,8 +142,7 @@ private:
   void parsePPPragma();
   void parsePPUnknown();
   void readTokenWithJavaScriptASI();
-  void parseStructuralElement(bool IsTopLevel = false,
-                              TokenType NextLBracesType = TT_Unknown,
+  void parseStructuralElement(const FormatToken *OpeningBrace = nullptr,
                               IfStmtKind *IfKind = nullptr,
                               FormatToken **IfLeftBrace = nullptr,
                               bool *HasDoWhile = nullptr,
@@ -156,7 +150,7 @@ private:
   bool tryToParseBracedList();
   bool parseBracedList(bool ContinueOnSemicolons = false, bool IsEnum = false,
                        tok::TokenKind ClosingBraceKind = tok::r_brace);
-  void parseParens(TokenType AmpAmpTokenType = TT_Unknown);
+  bool parseParens(TokenType AmpAmpTokenType = TT_Unknown);
   void parseSquare(bool LambdaIntroducer = false);
   void keepAncestorBraces();
   void parseUnbracedBody(bool CheckEOF = false);
@@ -306,7 +300,7 @@ private:
   // Since the next token might already be in a new unwrapped line, we need to
   // store the comments belonging to that token.
   SmallVector<FormatToken *, 1> CommentsBeforeNextToken;
-  FormatToken *FormatTok;
+  FormatToken *FormatTok = nullptr;
   bool MustBreakBeforeNextToken;
 
   // The parsed lines. Only added to through \c CurrentLines.

@@ -6,12 +6,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIBC_SRC_SUPPORT_RPC_RPC_CLIENT_H
-#define LLVM_LIBC_SRC_SUPPORT_RPC_RPC_CLIENT_H
+#ifndef LLVM_LIBC_SRC___SUPPORT_RPC_RPC_CLIENT_H
+#define LLVM_LIBC_SRC___SUPPORT_RPC_RPC_CLIENT_H
 
 #include "rpc.h"
 
-#include <gpu/rpc.h>
+#include "llvm-libc-types/rpc_opcodes_t.h"
 
 namespace __llvm_libc {
 namespace rpc {

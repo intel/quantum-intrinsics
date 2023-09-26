@@ -26,6 +26,9 @@
 #  pragma GCC system_header
 #endif
 
+_LIBCPP_PUSH_MACROS
+#include <__undef_macros>
+
 _LIBCPP_BEGIN_NAMESPACE_STD
 
 // construct_at
@@ -59,7 +62,7 @@ template <class _ForwardIterator>
 _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20
 _ForwardIterator __destroy(_ForwardIterator, _ForwardIterator);
 
-template <class _Tp, typename enable_if<!is_array<_Tp>::value, int>::type = 0>
+template <class _Tp, __enable_if_t<!is_array<_Tp>::value, int> = 0>
 _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20
 void __destroy_at(_Tp* __loc) {
     _LIBCPP_ASSERT_UNCATEGORIZED(__loc != nullptr, "null pointer given to destroy_at");
@@ -67,7 +70,7 @@ void __destroy_at(_Tp* __loc) {
 }
 
 #if _LIBCPP_STD_VER >= 20
-template <class _Tp, typename enable_if<is_array<_Tp>::value, int>::type = 0>
+template <class _Tp, __enable_if_t<is_array<_Tp>::value, int> = 0>
 _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20
 void __destroy_at(_Tp* __loc) {
     _LIBCPP_ASSERT_UNCATEGORIZED(__loc != nullptr, "null pointer given to destroy_at");
@@ -126,5 +129,7 @@ _ForwardIterator destroy_n(_ForwardIterator __first, _Size __n) {
 #endif // _LIBCPP_STD_VER >= 17
 
 _LIBCPP_END_NAMESPACE_STD
+
+_LIBCPP_POP_MACROS
 
 #endif // _LIBCPP___MEMORY_CONSTRUCT_AT_H

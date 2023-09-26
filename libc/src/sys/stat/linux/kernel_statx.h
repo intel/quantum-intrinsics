@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIBC_SRC_SYS_STAT_LINUX_STATX_H
-#define LLVM_LIBC_SRC_SYS_STAT_LINUX_STATX_H
+#ifndef LLVM_LIBC_SRC_SYS_STAT_LINUX_KERNEL_STATX_H
+#define LLVM_LIBC_SRC_SYS_STAT_LINUX_KERNEL_STATX_H
 
 #include "src/__support/OSUtil/syscall.h" // For internal syscall function.
 #include "src/__support/common.h"
@@ -73,8 +73,8 @@ LIBC_INLINE int statx(int dirfd, const char *__restrict path, int flags,
                       struct stat *__restrict statbuf) {
   // We make a statx syscall and copy out the result into the |statbuf|.
   ::statx_buf xbuf;
-  long ret = __llvm_libc::syscall_impl(SYS_statx, dirfd, path, flags,
-                                       ::STATX_BASIC_STATS_MASK, &xbuf);
+  int ret = __llvm_libc::syscall_impl<int>(SYS_statx, dirfd, path, flags,
+                                           ::STATX_BASIC_STATS_MASK, &xbuf);
   if (ret < 0)
     return -ret;
 
@@ -100,4 +100,4 @@ LIBC_INLINE int statx(int dirfd, const char *__restrict path, int flags,
 
 } // namespace __llvm_libc
 
-#endif // LLVM_LIBC_SRC_SYS_STAT_LINUX_STATX_H
+#endif // LLVM_LIBC_SRC_SYS_STAT_LINUX_KERNEL_STATX_H

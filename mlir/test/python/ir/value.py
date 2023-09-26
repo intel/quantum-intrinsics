@@ -1,4 +1,4 @@
-# RUN: %PYTHON %s | FileCheck %s
+# RUN: %PYTHON %s | FileCheck %s --enable-var-scope=false
 
 import gc
 from mlir.ir import *
@@ -199,6 +199,16 @@ def testValuePrintAsOperand():
         # CHECK: %[[VAL4]]
         print(value4.get_name())
 
+        print("With AsmState")
+        # CHECK-LABEL: With AsmState
+        state = AsmState(value3, use_local_scope=True)
+        # CHECK: %0
+        print(value3.get_name(state=state))
+        # CHECK: %1
+        print(value4.get_name(state=state))
+
+        print("With use_local_scope")
+        # CHECK-LABEL: With use_local_scope
         # CHECK: %0
         print(value3.get_name(use_local_scope=True))
         # CHECK: %1
@@ -238,3 +248,25 @@ def testValuePrintAsOperand():
         value2.owner.detach_from_parent()
         # CHECK: %0
         print(value2.get_name())
+
+
+# CHECK-LABEL: TEST: testValueSetType
+@run
+def testValueSetType():
+    ctx = Context()
+    ctx.allow_unregistered_dialects = True
+    with Location.unknown(ctx):
+        i32 = IntegerType.get_signless(32)
+        i64 = IntegerType.get_signless(64)
+        module = Module.create()
+        with InsertionPoint(module.body):
+            value = Operation.create("custom.op1", results=[i32]).results[0]
+            # CHECK: Value(%[[VAL1:.*]] = "custom.op1"() : () -> i32)
+            print(value)
+
+            value.set_type(i64)
+            # CHECK: Value(%[[VAL1]] = "custom.op1"() : () -> i64)
+            print(value)
+
+            # CHECK: %[[VAL1]] = "custom.op1"() : () -> i64
+            print(value.owner)

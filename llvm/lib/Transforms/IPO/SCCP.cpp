@@ -43,7 +43,7 @@ STATISTIC(NumInstReplaced,
           "Number of instructions replaced with (simpler) instruction");
 
 static cl::opt<unsigned> FuncSpecMaxIters(
-    "funcspec-max-iters", cl::init(1), cl::Hidden, cl::desc(
+    "funcspec-max-iters", cl::init(10), cl::Hidden, cl::desc(
     "The maximum number of iterations function specialization is run"));
 
 static void findReturnsToZap(Function &F,
@@ -191,8 +191,8 @@ static bool runIPSCCP(
           if (ME == MemoryEffects::unknown())
             return AL;
 
-          ME |= MemoryEffects(MemoryEffects::Other,
-                              ME.getModRef(MemoryEffects::ArgMem));
+          ME |= MemoryEffects(IRMemLocation::Other,
+                              ME.getModRef(IRMemLocation::ArgMem));
           return AL.addFnAttribute(
               F.getContext(),
               Attribute::getWithMemoryEffects(F.getContext(), ME));

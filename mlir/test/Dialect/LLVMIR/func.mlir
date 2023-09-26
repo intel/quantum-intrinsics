@@ -205,6 +205,17 @@ module {
     llvm.return
   }
 
+  // CHECK-LABEL: local_unnamed_addr @local_unnamed_addr_func
+  llvm.func local_unnamed_addr @local_unnamed_addr_func() {
+    llvm.return
+  }
+
+  // CHECK-LABEL: @align_func
+  // CHECK-SAME: attributes {alignment = 2 : i64}
+  llvm.func @align_func() attributes {alignment = 2 : i64} {
+    llvm.return
+  }
+
   // CHECK: llvm.comdat @__llvm_comdat
   llvm.comdat @__llvm_comdat {
     // CHECK: llvm.comdat_selector @any any
@@ -212,6 +223,12 @@ module {
   }
   // CHECK: @any() comdat(@__llvm_comdat::@any) attributes
   llvm.func @any() comdat(@__llvm_comdat::@any) attributes { dso_local } {
+    llvm.return
+  }
+
+  llvm.func @vscale_roundtrip() vscale_range(1, 2) {
+    // CHECK: @vscale_roundtrip
+    // CHECK-SAME: vscale_range(1, 2)
     llvm.return
   }
 }

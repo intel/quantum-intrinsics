@@ -217,7 +217,7 @@ void CodeGenFunction::EmitCXXGlobalVarDeclInit(const VarDecl &D,
         D.needsDestruction(getContext()) == QualType::DK_cxx_destructor;
     if (PerformInit)
       EmitDeclInit(*this, D, DeclAddr);
-    if (CGM.isTypeConstant(D.getType(), true, !NeedsDtor))
+    if (D.getType().isConstantStorage(getContext(), true, !NeedsDtor))
       EmitDeclInvariant(*this, D, DeclPtr);
     else
       EmitDeclDestroy(*this, D, DeclAddr);
@@ -279,8 +279,8 @@ llvm::Function *CodeGenFunction::createTLSAtExitStub(
   }
 
   const CGFunctionInfo &FI = CGM.getTypes().arrangeLLVMFunctionInfo(
-      getContext().IntTy, /*instanceMethod=*/false, /*chainCall=*/false,
-      {getContext().IntTy}, FunctionType::ExtInfo(), {}, RequiredArgs::All);
+      getContext().IntTy, FnInfoOpts::None, {getContext().IntTy},
+      FunctionType::ExtInfo(), {}, RequiredArgs::All);
 
   // Get the stub function type, int(*)(int,...).
   llvm::FunctionType *StubTy =
@@ -643,7 +643,7 @@ void CodeGenModule::EmitCXXThreadLocalInitFunc() {
    This is arranged to be run only once regardless of how many times the module
    might be included transitively.  This arranged by using a guard variable.
 
-   If there are no initalizers at all (and also no imported modules) we reduce
+   If there are no initializers at all (and also no imported modules) we reduce
    this to an empty function (since the Itanium ABI requires that this function
    be available to a caller, which might be produced by a different
    implementation).

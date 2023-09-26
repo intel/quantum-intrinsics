@@ -34,10 +34,12 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Testing/Support/SupportHelpers.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -1879,6 +1881,42 @@ TEST(Diagnostics, Tags) {
                 withTag(DiagnosticTag::Deprecated)))));
 }
 
+TEST(Diagnostics, DeprecatedDiagsAreHints) {
+  ClangdDiagnosticOptions Opts;
+  std::optional<clangd::Diagnostic> Diag;
+  clangd::Diag D;
+  D.Range = {pos(1, 2), pos(3, 4)};
+  D.InsideMainFile = true;
+
+  // Downgrade warnings with deprecated tags to remark.
+  D.Tags = {Deprecated};
+  D.Severity = DiagnosticsEngine::Warning;
+  toLSPDiags(D, {}, Opts,
+             [&](clangd::Diagnostic LSPDiag, ArrayRef<clangd::Fix>) {
+               Diag = std::move(LSPDiag);
+             });
+  EXPECT_EQ(Diag->severity, getSeverity(DiagnosticsEngine::Remark));
+  Diag.reset();
+
+  // Preserve errors.
+  D.Severity = DiagnosticsEngine::Error;
+  toLSPDiags(D, {}, Opts,
+             [&](clangd::Diagnostic LSPDiag, ArrayRef<clangd::Fix>) {
+               Diag = std::move(LSPDiag);
+             });
+  EXPECT_EQ(Diag->severity, getSeverity(DiagnosticsEngine::Error));
+  Diag.reset();
+
+  // No-op without tag.
+  D.Tags = {};
+  D.Severity = DiagnosticsEngine::Warning;
+  toLSPDiags(D, {}, Opts,
+             [&](clangd::Diagnostic LSPDiag, ArrayRef<clangd::Fix>) {
+               Diag = std::move(LSPDiag);
+             });
+  EXPECT_EQ(Diag->severity, getSeverity(DiagnosticsEngine::Warning));
+}
+
 TEST(DiagnosticsTest, IncludeCleaner) {
   Annotations Test(R"cpp(
 $fix[[  $diag[[#include "unused.h"]]
@@ -1924,8 +1962,8 @@ $fix[[  $diag[[#include "unused.h"]]
           withTag(DiagnosticTag::Unnecessary), diagSource(Diag::Clangd),
           withFix(Fix(Test.range("fix"), "", "remove #include directive")))));
   auto &Diag = AST.getDiagnostics().front();
-  EXPECT_EQ(getDiagnosticDocURI(Diag.Source, Diag.ID, Diag.Name),
-            std::string("https://clangd.llvm.org/guides/include-cleaner"));
+  EXPECT_THAT(getDiagnosticDocURI(Diag.Source, Diag.ID, Diag.Name),
+              llvm::ValueIs(Not(IsEmpty())));
   Cfg.Diagnostics.SuppressAll = true;
   WithContextValue SuppressAllWithCfg(Config::Key, std::move(Cfg));
   EXPECT_THAT(TU.build().getDiagnostics(), IsEmpty());

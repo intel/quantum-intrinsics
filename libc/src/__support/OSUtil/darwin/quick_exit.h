@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIBC_SRC_SUPPORT_OSUTIL_DARWIN_QUICK_EXIT_H
-#define LLVM_LIBC_SRC_SUPPORT_OSUTIL_DARWIN_QUICK_EXIT_H
+#ifndef LLVM_LIBC_SRC___SUPPORT_OSUTIL_DARWIN_QUICK_EXIT_H
+#define LLVM_LIBC_SRC___SUPPORT_OSUTIL_DARWIN_QUICK_EXIT_H
 
 #include "syscall.h" // For internal syscall function.
 
@@ -17,10 +17,10 @@ namespace __llvm_libc {
 
 LIBC_INLINE void quick_exit(int status) {
   for (;;) {
-    __llvm_libc::syscall_impl(1 /* SYS_exit */, status);
+    __llvm_libc::syscall_impl<long>(1 /* SYS_exit */, status);
   }
 }
 
 } // namespace __llvm_libc
 
-#endif // LLVM_LIBC_SRC_SUPPORT_OSUTIL_DARWIN_QUICK_EXIT_H
+#endif // LLVM_LIBC_SRC___SUPPORT_OSUTIL_DARWIN_QUICK_EXIT_H

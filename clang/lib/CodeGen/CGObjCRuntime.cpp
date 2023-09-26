@@ -63,12 +63,10 @@ LValue CGObjCRuntime::EmitValueForIvarAtOffset(CodeGen::CodeGenFunction &CGF,
       CGF.CGM.getContext().getObjCObjectPointerType(InterfaceTy);
   QualType IvarTy =
       Ivar->getUsageType(ObjectPtrTy).withCVRQualifiers(CVRQualifiers);
-  llvm::Type *LTy = CGF.CGM.getTypes().ConvertTypeForMem(IvarTy);
-  llvm::Value *V = CGF.Builder.CreateBitCast(BaseValue, CGF.Int8PtrTy);
+  llvm::Value *V = BaseValue;
   V = CGF.Builder.CreateInBoundsGEP(CGF.Int8Ty, V, Offset, "add.ptr");
 
   if (!Ivar->isBitField()) {
-    V = CGF.Builder.CreateBitCast(V, llvm::PointerType::getUnqual(LTy));
     LValue LV = CGF.MakeNaturalAlignAddrLValue(V, IvarTy);
     return LV;
   }
@@ -107,10 +105,10 @@ LValue CGObjCRuntime::EmitValueForIvarAtOffset(CodeGen::CodeGenFunction &CGF,
                              CGF.CGM.getContext().toBits(StorageSize),
                              CharUnits::fromQuantity(0)));
 
-  Address Addr = Address(V, CGF.Int8Ty, Alignment);
-  Addr = CGF.Builder.CreateElementBitCast(Addr,
-                                   llvm::Type::getIntNTy(CGF.getLLVMContext(),
-                                                         Info->StorageSize));
+  Address Addr =
+      Address(V, llvm::Type::getIntNTy(CGF.getLLVMContext(), Info->StorageSize),
+              Alignment);
+
   return LValue::MakeBitfield(Addr, *Info, IvarTy,
                               LValueBaseInfo(AlignmentSource::Decl),
                               TBAAAccessInfo());

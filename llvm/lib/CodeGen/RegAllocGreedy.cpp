@@ -141,6 +141,12 @@ static cl::opt<bool> GreedyReverseLocalAssignment(
              "shorter local live ranges will tend to be allocated first"),
     cl::Hidden);
 
+static cl::opt<unsigned> SplitThresholdForRegWithHint(
+    "split-threshold-for-reg-with-hint",
+    cl::desc("The threshold for splitting a virtual register with a hint, in "
+             "percentate"),
+    cl::init(75), cl::Hidden);
+
 static RegisterRegAlloc greedyRegAlloc("greedy", "greedy register allocator",
                                        createGreedyRegisterAllocator);
 
@@ -422,6 +428,11 @@ MCRegister RAGreedy::tryAssign(const LiveInterval &VirtReg,
         evictInterference(VirtReg, PhysHint, NewVRegs);
         return PhysHint;
       }
+
+      // We can also split the virtual register in cold blocks.
+      if (trySplitAroundHintReg(PhysHint, VirtReg, NewVRegs, Order))
+        return 0;
+
       // Record the missed hint, we may be able to recover
       // at the end if the surrounding allocation changed.
       SetOfBrokenHints.insert(&VirtReg);
@@ -1064,6 +1075,85 @@ MCRegister RAGreedy::tryRegionSplit(const LiveInterval &VirtReg,
   return doRegionSplit(VirtReg, BestCand, HasCompact, NewVRegs);
 }
 
+unsigned
+RAGreedy::calculateRegionSplitCostAroundReg(MCPhysReg PhysReg,
+                                            AllocationOrder &Order,
+                                            BlockFrequency &BestCost,
+                                            unsigned &NumCands,
+                                            unsigned &BestCand) {
+  // Discard bad candidates before we run out of interference cache cursors.
+  // This will only affect register classes with a lot of registers (>32).
+  if (NumCands == IntfCache.getMaxCursors()) {
+    unsigned WorstCount = ~0u;
+    unsigned Worst = 0;
+    for (unsigned CandIndex = 0; CandIndex != NumCands; ++CandIndex) {
+      if (CandIndex == BestCand || !GlobalCand[CandIndex].PhysReg)
+        continue;
+      unsigned Count = GlobalCand[CandIndex].LiveBundles.count();
+      if (Count < WorstCount) {
+        Worst = CandIndex;
+        WorstCount = Count;
+      }
+    }
+    --NumCands;
+    GlobalCand[Worst] = GlobalCand[NumCands];
+    if (BestCand == NumCands)
+      BestCand = Worst;
+  }
+
+  if (GlobalCand.size() <= NumCands)
+    GlobalCand.resize(NumCands+1);
+  GlobalSplitCandidate &Cand = GlobalCand[NumCands];
+  Cand.reset(IntfCache, PhysReg);
+
+  SpillPlacer->prepare(Cand.LiveBundles);
+  BlockFrequency Cost;
+  if (!addSplitConstraints(Cand.Intf, Cost)) {
+    LLVM_DEBUG(dbgs() << printReg(PhysReg, TRI) << "\tno positive bundles\n");
+    return BestCand;
+  }
+  LLVM_DEBUG(dbgs() << printReg(PhysReg, TRI) << "\tstatic = ";
+             MBFI->printBlockFreq(dbgs(), Cost));
+  if (Cost >= BestCost) {
+    LLVM_DEBUG({
+      if (BestCand == NoCand)
+        dbgs() << " worse than no bundles\n";
+      else
+        dbgs() << " worse than "
+               << printReg(GlobalCand[BestCand].PhysReg, TRI) << '\n';
+    });
+    return BestCand;
+  }
+  if (!growRegion(Cand)) {
+    LLVM_DEBUG(dbgs() << ", cannot spill all interferences.\n");
+    return BestCand;
+  }
+
+  SpillPlacer->finish();
+
+  // No live bundles, defer to splitSingleBlocks().
+  if (!Cand.LiveBundles.any()) {
+    LLVM_DEBUG(dbgs() << " no bundles.\n");
+    return BestCand;
+  }
+
+  Cost += calcGlobalSplitCost(Cand, Order);
+  LLVM_DEBUG({
+    dbgs() << ", total = ";
+    MBFI->printBlockFreq(dbgs(), Cost) << " with bundles";
+    for (int I : Cand.LiveBundles.set_bits())
+      dbgs() << " EB#" << I;
+    dbgs() << ".\n";
+  });
+  if (Cost < BestCost) {
+    BestCand = NumCands;
+    BestCost = Cost;
+  }
+  ++NumCands;
+
+  return BestCand;
+}
+
 unsigned RAGreedy::calculateRegionSplitCost(const LiveInterval &VirtReg,
                                             AllocationOrder &Order,
                                             BlockFrequency &BestCost,
@@ -1075,75 +1165,8 @@ unsigned RAGreedy::calculateRegionSplitCost(const LiveInterval &VirtReg,
     if (IgnoreCSR && EvictAdvisor->isUnusedCalleeSavedReg(PhysReg))
       continue;
 
-    // Discard bad candidates before we run out of interference cache cursors.
-    // This will only affect register classes with a lot of registers (>32).
-    if (NumCands == IntfCache.getMaxCursors()) {
-      unsigned WorstCount = ~0u;
-      unsigned Worst = 0;
-      for (unsigned CandIndex = 0; CandIndex != NumCands; ++CandIndex) {
-        if (CandIndex == BestCand || !GlobalCand[CandIndex].PhysReg)
-          continue;
-        unsigned Count = GlobalCand[CandIndex].LiveBundles.count();
-        if (Count < WorstCount) {
-          Worst = CandIndex;
-          WorstCount = Count;
-        }
-      }
-      --NumCands;
-      GlobalCand[Worst] = GlobalCand[NumCands];
-      if (BestCand == NumCands)
-        BestCand = Worst;
-    }
-
-    if (GlobalCand.size() <= NumCands)
-      GlobalCand.resize(NumCands+1);
-    GlobalSplitCandidate &Cand = GlobalCand[NumCands];
-    Cand.reset(IntfCache, PhysReg);
-
-    SpillPlacer->prepare(Cand.LiveBundles);
-    BlockFrequency Cost;
-    if (!addSplitConstraints(Cand.Intf, Cost)) {
-      LLVM_DEBUG(dbgs() << printReg(PhysReg, TRI) << "\tno positive bundles\n");
-      continue;
-    }
-    LLVM_DEBUG(dbgs() << printReg(PhysReg, TRI) << "\tstatic = ";
-               MBFI->printBlockFreq(dbgs(), Cost));
-    if (Cost >= BestCost) {
-      LLVM_DEBUG({
-        if (BestCand == NoCand)
-          dbgs() << " worse than no bundles\n";
-        else
-          dbgs() << " worse than "
-                 << printReg(GlobalCand[BestCand].PhysReg, TRI) << '\n';
-      });
-      continue;
-    }
-    if (!growRegion(Cand)) {
-      LLVM_DEBUG(dbgs() << ", cannot spill all interferences.\n");
-      continue;
-    }
-
-    SpillPlacer->finish();
-
-    // No live bundles, defer to splitSingleBlocks().
-    if (!Cand.LiveBundles.any()) {
-      LLVM_DEBUG(dbgs() << " no bundles.\n");
-      continue;
-    }
-
-    Cost += calcGlobalSplitCost(Cand, Order);
-    LLVM_DEBUG({
-      dbgs() << ", total = ";
-      MBFI->printBlockFreq(dbgs(), Cost) << " with bundles";
-      for (int I : Cand.LiveBundles.set_bits())
-        dbgs() << " EB#" << I;
-      dbgs() << ".\n";
-    });
-    if (Cost < BestCost) {
-      BestCand = NumCands;
-      BestCost = Cost;
-    }
-    ++NumCands;
+    calculateRegionSplitCostAroundReg(PhysReg, Order, BestCost, NumCands,
+                                      BestCand);
   }
 
   return BestCand;
@@ -1187,6 +1210,53 @@ unsigned RAGreedy::doRegionSplit(const LiveInterval &VirtReg, unsigned BestCand,
 
   splitAroundRegion(LREdit, UsedCands);
   return 0;
+}
+
+// VirtReg has a physical Hint, this function tries to split VirtReg around
+// Hint if we can place new COPY instructions in cold blocks.
+bool RAGreedy::trySplitAroundHintReg(MCPhysReg Hint,
+                                     const LiveInterval &VirtReg,
+                                     SmallVectorImpl<Register> &NewVRegs,
+                                     AllocationOrder &Order) {
+  BlockFrequency Cost = 0;
+  Register Reg = VirtReg.reg();
+
+  // Compute the cost of assigning a non Hint physical register to VirtReg.
+  // We define it as the total frequency of broken COPY instructions to/from
+  // Hint register, and after split, they can be deleted.
+  for (const MachineInstr &Instr : MRI->reg_nodbg_instructions(Reg)) {
+    if (!TII->isFullCopyInstr(Instr))
+      continue;
+    Register OtherReg = Instr.getOperand(1).getReg();
+    if (OtherReg == Reg) {
+      OtherReg = Instr.getOperand(0).getReg();
+      if (OtherReg == Reg)
+        continue;
+      // Check if VirtReg interferes with OtherReg after this COPY instruction.
+      if (VirtReg.liveAt(LIS->getInstructionIndex(Instr).getRegSlot()))
+        continue;
+    }
+    MCRegister OtherPhysReg =
+        OtherReg.isPhysical() ? OtherReg.asMCReg() : VRM->getPhys(OtherReg);
+    if (OtherPhysReg == Hint)
+      Cost += MBFI->getBlockFreq(Instr.getParent());
+  }
+
+  // Decrease the cost so it will be split in colder blocks.
+  BranchProbability Threshold(SplitThresholdForRegWithHint, 100);
+  Cost *= Threshold;
+  if (Cost == 0)
+    return false;
+
+  unsigned NumCands = 0;
+  unsigned BestCand = NoCand;
+  SA->analyze(&VirtReg);
+  calculateRegionSplitCostAroundReg(Hint, Order, Cost, NumCands, BestCand);
+  if (BestCand == NoCand)
+    return false;
+
+  doRegionSplit(VirtReg, BestCand, false/*HasCompact*/, NewVRegs);
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1282,10 +1352,12 @@ static LaneBitmask getInstReadLaneMask(const MachineRegisterInfo &MRI,
 /// VirtReg.
 static bool readsLaneSubset(const MachineRegisterInfo &MRI,
                             const MachineInstr *MI, const LiveInterval &VirtReg,
-                            const TargetRegisterInfo *TRI, SlotIndex Use) {
+                            const TargetRegisterInfo *TRI, SlotIndex Use,
+                            const TargetInstrInfo *TII) {
   // Early check the common case.
-  if (MI->isCopy() &&
-      MI->getOperand(0).getSubReg() == MI->getOperand(1).getSubReg())
+  auto DestSrc = TII->isCopyInstr(*MI);
+  if (DestSrc &&
+      DestSrc->Destination->getSubReg() == DestSrc->Source->getSubReg())
     return false;
 
   // FIXME: We're only considering uses, but should be consider defs too?
@@ -1344,14 +1416,14 @@ unsigned RAGreedy::tryInstructionSplit(const LiveInterval &VirtReg,
   // the allocation.
   for (const SlotIndex Use : Uses) {
     if (const MachineInstr *MI = Indexes->getInstructionFromIndex(Use)) {
-      if (MI->isFullCopy() ||
+      if (TII->isFullCopyInstr(*MI) ||
           (SplitSubClass &&
            SuperRCNumAllocatableRegs ==
                getNumAllocatableRegsForConstraints(MI, VirtReg.reg(), SuperRC,
                                                    TII, TRI, RegClassInfo)) ||
           // TODO: Handle split for subranges with subclass constraints?
           (!SplitSubClass && VirtReg.hasSubRanges() &&
-           !readsLaneSubset(*MRI, MI, VirtReg, TRI, Use))) {
+           !readsLaneSubset(*MRI, MI, VirtReg, TRI, Use, TII))) {
         LLVM_DEBUG(dbgs() << "    skip:\t" << Use << '\t' << *MI);
         continue;
       }
@@ -2138,7 +2210,7 @@ void RAGreedy::initializeCSRCost() {
 /// \p Out is not cleared before being populated.
 void RAGreedy::collectHintInfo(Register Reg, HintsInfo &Out) {
   for (const MachineInstr &Instr : MRI->reg_nodbg_instructions(Reg)) {
-    if (!Instr.isFullCopy())
+    if (!TII->isFullCopyInstr(Instr))
       continue;
     // Look for the other end of the copy.
     Register OtherReg = Instr.getOperand(0).getReg();
@@ -2327,6 +2399,9 @@ MCRegister RAGreedy::selectOrSplitImpl(const LiveInterval &VirtReg,
     } else
       return PhysReg;
   }
+  // Non emtpy NewVRegs means VirtReg has been split.
+  if (!NewVRegs.empty())
+    return 0;
 
   LiveRangeStage Stage = ExtraInfo->getStage(VirtReg);
   LLVM_DEBUG(dbgs() << StageName[Stage] << " Cascade "
@@ -2453,9 +2528,10 @@ RAGreedy::RAGreedyStats RAGreedy::computeStats(MachineBasicBlock &MBB) {
            MI.getOpcode() == TargetOpcode::STATEPOINT;
   };
   for (MachineInstr &MI : MBB) {
-    if (MI.isCopy()) {
-      const MachineOperand &Dest = MI.getOperand(0);
-      const MachineOperand &Src = MI.getOperand(1);
+    auto DestSrc = TII->isCopyInstr(MI);
+    if (DestSrc) {
+      const MachineOperand &Dest = *DestSrc->Destination;
+      const MachineOperand &Src = *DestSrc->Source;
       Register SrcReg = Src.getReg();
       Register DestReg = Dest.getReg();
       // Only count `COPY`s with a virtual register as source or destination.
@@ -2616,6 +2692,9 @@ bool RAGreedy::runOnMachineFunction(MachineFunction &mf) {
     return false;
 
   Indexes = &getAnalysis<SlotIndexes>();
+  // Renumber to get accurate and consistent results from
+  // SlotIndexes::getApproxInstrDistance.
+  Indexes->packIndexes();
   MBFI = &getAnalysis<MachineBlockFrequencyInfo>();
   DomTree = &getAnalysis<MachineDominatorTree>();
   ORE = &getAnalysis<MachineOptimizationRemarkEmitterPass>().getORE();

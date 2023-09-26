@@ -1278,17 +1278,16 @@ mlir::affine::makeComposedFoldedAffineApply(OpBuilder &b, Location loc,
                                             ArrayRef<OpFoldResult> operands) {
   assert(map.getNumResults() == 1 && "building affine.apply with !=1 result");
 
-  // Temporarily disconnect the listener, so that no notification is triggered
-  // if the op is folded.
+  // Create new builder without a listener, so that no notification is
+  // triggered if the op is folded.
   // TODO: OpBuilder::createOrFold should return OpFoldResults, then this
   // workaround is no longer needed.
-  OpBuilder::Listener *listener = b.getListener();
-  b.setListener(nullptr);
-  auto listenerResetter =
-      llvm::make_scope_exit([listener, &b] { b.setListener(listener); });
+  OpBuilder newBuilder(b.getContext());
+  newBuilder.setInsertionPoint(b.getInsertionBlock(), b.getInsertionPoint());
 
   // Create op.
-  AffineApplyOp applyOp = makeComposedAffineApply(b, loc, map, operands);
+  AffineApplyOp applyOp =
+      makeComposedAffineApply(newBuilder, loc, map, operands);
 
   // Get constant operands.
   SmallVector<Attribute> constOperands(applyOp->getNumOperands());
@@ -1299,7 +1298,7 @@ mlir::affine::makeComposedFoldedAffineApply(OpBuilder &b, Location loc,
   SmallVector<OpFoldResult> foldResults;
   if (failed(applyOp->fold(constOperands, foldResults)) ||
       foldResults.empty()) {
-    if (listener)
+    if (OpBuilder::Listener *listener = b.getListener())
       listener->notifyOperationInserted(applyOp);
     return applyOp.getResult();
   }
@@ -1347,17 +1346,15 @@ template <typename OpTy>
 static OpFoldResult makeComposedFoldedMinMax(OpBuilder &b, Location loc,
                                              AffineMap map,
                                              ArrayRef<OpFoldResult> operands) {
-  // Temporarily disconnect the listener, so that no notification is triggered
-  // if the op is folded.
+  // Create new builder without a listener, so that no notification is
+  // triggered if the op is folded.
   // TODO: OpBuilder::createOrFold should return OpFoldResults, then this
   // workaround is no longer needed.
-  OpBuilder::Listener *listener = b.getListener();
-  b.setListener(nullptr);
-  auto listenerResetter =
-      llvm::make_scope_exit([listener, &b] { b.setListener(listener); });
+  OpBuilder newBuilder(b.getContext());
+  newBuilder.setInsertionPoint(b.getInsertionBlock(), b.getInsertionPoint());
 
   // Create op.
-  auto minMaxOp = makeComposedMinMax<OpTy>(b, loc, map, operands);
+  auto minMaxOp = makeComposedMinMax<OpTy>(newBuilder, loc, map, operands);
 
   // Get constant operands.
   SmallVector<Attribute> constOperands(minMaxOp->getNumOperands());
@@ -1368,7 +1365,7 @@ static OpFoldResult makeComposedFoldedMinMax(OpBuilder &b, Location loc,
   SmallVector<OpFoldResult> foldResults;
   if (failed(minMaxOp->fold(constOperands, foldResults)) ||
       foldResults.empty()) {
-    if (listener)
+    if (OpBuilder::Listener *listener = b.getListener())
       listener->notifyOperationInserted(minMaxOp);
     return minMaxOp.getResult();
   }
@@ -2173,7 +2170,7 @@ static void printBound(AffineMapAttr boundMap,
     // Print bound that consists of a single SSA symbol if the map is over a
     // single symbol.
     if (map.getNumDims() == 0 && map.getNumSymbols() == 1) {
-      if (auto symExpr = expr.dyn_cast<AffineSymbolExpr>()) {
+      if (expr.dyn_cast<AffineSymbolExpr>()) {
         p.printOperand(*boundOperands.begin());
         return;
       }
@@ -2212,7 +2209,7 @@ void AffineForOp::print(OpAsmPrinter &p) {
   if (getNumIterOperands() > 0) {
     p << " iter_args(";
     auto regionArgs = getRegionIterArgs();
-    auto operands = getIterOperands();
+    auto operands = getInits();
 
     llvm::interleaveComma(llvm::zip(regionArgs, operands), p, [&](auto it) {
       p << std::get<0>(it) << " = " << std::get<1>(it);
@@ -2334,7 +2331,7 @@ struct AffineForEmptyLoopFolder : public OpRewritePattern<AffineForOp> {
     if (tripCount && *tripCount == 0) {
       // The initial values of the iteration arguments would be the op's
       // results.
-      rewriter.replaceOp(forOp, forOp.getIterOperands());
+      rewriter.replaceOp(forOp, forOp.getInits());
       return success();
     }
     SmallVector<Value, 4> replacements;
@@ -2355,7 +2352,7 @@ struct AffineForEmptyLoopFolder : public OpRewritePattern<AffineForOp> {
         unsigned pos = std::distance(iterArgs.begin(), iterArgIt);
         if (pos != i)
           iterArgsNotInOrder = true;
-        replacements.push_back(forOp.getIterOperands()[pos]);
+        replacements.push_back(forOp.getInits()[pos]);
       }
     }
     // Bail out when the trip count is unknown and the loop returns any value
@@ -2378,36 +2375,25 @@ void AffineForOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.add<AffineForEmptyLoopFolder>(context);
 }
 
-/// Return operands used when entering the region at 'index'. These operands
-/// correspond to the loop iterator operands, i.e., those excluding the
-/// induction variable. AffineForOp only has one region, so zero is the only
-/// valid value for `index`.
-OperandRange
-AffineForOp::getSuccessorEntryOperands(std::optional<unsigned> index) {
-  assert((!index || *index == 0) && "invalid region index");
+OperandRange AffineForOp::getEntrySuccessorOperands(RegionBranchPoint point) {
+  assert((point.isParent() || point == getRegion()) && "invalid region point");
 
   // The initial operands map to the loop arguments after the induction
   // variable or are forwarded to the results when the trip count is zero.
-  return getIterOperands();
+  return getInits();
 }
 
-/// Given the region at `index`, or the parent operation if `index` is None,
-/// return the successor regions. These are the regions that may be selected
-/// during the flow of control. `operands` is a set of optional attributes that
-/// correspond to a constant value for each operand, or null if that operand is
-/// not a constant.
 void AffineForOp::getSuccessorRegions(
-    std::optional<unsigned> index, ArrayRef<Attribute> operands,
-    SmallVectorImpl<RegionSuccessor> &regions) {
-  assert((!index.has_value() || index.value() == 0) && "expected loop region");
+    RegionBranchPoint point, SmallVectorImpl<RegionSuccessor> &regions) {
+  assert((point.isParent() || point == getRegion()) && "expected loop region");
   // The loop may typically branch back to its body or to the parent operation.
   // If the predecessor is the parent op and the trip count is known to be at
   // least one, branch into the body using the iterator arguments. And in cases
   // we know the trip count is zero, it can only branch back to its parent.
   std::optional<uint64_t> tripCount = getTrivialConstantTripCount(*this);
-  if (!index.has_value() && tripCount.has_value()) {
+  if (point.isParent() && tripCount.has_value()) {
     if (tripCount.value() > 0) {
-      regions.push_back(RegionSuccessor(&getLoopBody(), getRegionIterArgs()));
+      regions.push_back(RegionSuccessor(&getRegion(), getRegionIterArgs()));
       return;
     }
     if (tripCount.value() == 0) {
@@ -2418,14 +2404,14 @@ void AffineForOp::getSuccessorRegions(
 
   // From the loop body, if the trip count is one, we can only branch back to
   // the parent.
-  if (index && tripCount && *tripCount == 1) {
+  if (!point.isParent() && tripCount && *tripCount == 1) {
     regions.push_back(RegionSuccessor(getResults()));
     return;
   }
 
   // In all other cases, the loop may branch back to itself or the parent
   // operation.
-  regions.push_back(RegionSuccessor(&getLoopBody(), getRegionIterArgs()));
+  regions.push_back(RegionSuccessor(&getRegion(), getRegionIterArgs()));
   regions.push_back(RegionSuccessor(getResults()));
 }
 
@@ -2445,7 +2431,7 @@ LogicalResult AffineForOp::fold(FoldAdaptor adaptor,
     // does not return any results. Since ops that do not return results cannot
     // be folded away, we would enter an infinite loop of folds on the same
     // affine.for op.
-    results.assign(getIterOperands().begin(), getIterOperands().end());
+    results.assign(getInits().begin(), getInits().end());
     folded = true;
   }
   return success(folded);
@@ -2471,7 +2457,7 @@ void AffineForOp::setLowerBound(ValueRange lbOperands, AffineMap map) {
 
   auto ubOperands = getUpperBoundOperands();
   newOperands.append(ubOperands.begin(), ubOperands.end());
-  auto iterOperands = getIterOperands();
+  auto iterOperands = getInits();
   newOperands.append(iterOperands.begin(), iterOperands.end());
   (*this)->setOperands(newOperands);
 
@@ -2484,7 +2470,7 @@ void AffineForOp::setUpperBound(ValueRange ubOperands, AffineMap map) {
 
   SmallVector<Value, 4> newOperands(getLowerBoundOperands());
   newOperands.append(ubOperands.begin(), ubOperands.end());
-  auto iterOperands = getIterOperands();
+  auto iterOperands = getInits();
   newOperands.append(iterOperands.begin(), iterOperands.end());
   (*this)->setOperands(newOperands);
 
@@ -2564,7 +2550,7 @@ bool AffineForOp::matchingBoundOperandList() {
   return true;
 }
 
-Region &AffineForOp::getLoopBody() { return getRegion(); }
+SmallVector<Region *> AffineForOp::getLoopRegions() { return {&getRegion()}; }
 
 std::optional<Value> AffineForOp::getSingleInductionVar() {
   return getInductionVar();
@@ -2713,8 +2699,8 @@ static AffineForOp
 buildAffineLoopFromValues(OpBuilder &builder, Location loc, Value lb, Value ub,
                           int64_t step,
                           AffineForOp::BodyBuilderFn bodyBuilderFn) {
-  auto lbConst = lb.getDefiningOp<arith::ConstantIndexOp>();
-  auto ubConst = ub.getDefiningOp<arith::ConstantIndexOp>();
+  std::optional<int64_t> lbConst = getConstantIntValue(lb);
+  std::optional<int64_t> ubConst = getConstantIntValue(ub);
   if (lbConst && ubConst)
     return buildAffineLoopFromConstants(builder, loc, lbConst.value(),
                                         ubConst.value(), step, bodyBuilderFn);
@@ -2750,7 +2736,7 @@ AffineForOp mlir::affine::replaceForOpWithNewYields(OpBuilder &b,
   // Create a new loop before the existing one, with the extra operands.
   OpBuilder::InsertionGuard g(b);
   b.setInsertionPoint(loop);
-  auto operands = llvm::to_vector<4>(loop.getIterOperands());
+  auto operands = llvm::to_vector<4>(loop.getInits());
   operands.append(newIterOperands.begin(), newIterOperands.end());
   SmallVector<Value, 4> lbOperands(loop.getLowerBoundOperands());
   SmallVector<Value, 4> ubOperands(loop.getUpperBoundOperands());
@@ -2761,9 +2747,9 @@ AffineForOp mlir::affine::replaceForOpWithNewYields(OpBuilder &b,
       b.create<AffineForOp>(loop.getLoc(), lbOperands, lbMap, ubOperands, ubMap,
                             loop.getStep(), operands);
   // Take the body of the original parent loop.
-  newLoop.getLoopBody().takeBody(loop.getLoopBody());
+  newLoop.getRegion().takeBody(loop.getRegion());
   for (Value val : newIterArgs)
-    newLoop.getLoopBody().addArgument(val.getType(), val.getLoc());
+    newLoop.getRegion().addArgument(val.getType(), val.getLoc());
 
   // Update yield operation with new values to be added.
   if (!newYieldedValues.empty()) {
@@ -2863,18 +2849,20 @@ struct AlwaysTrueOrFalseIf : public OpRewritePattern<AffineIfOp> {
 /// AffineIfOp has two regions -- `then` and `else`. The flow of data should be
 /// as follows: AffineIfOp -> `then`/`else` -> AffineIfOp
 void AffineIfOp::getSuccessorRegions(
-    std::optional<unsigned> index, ArrayRef<Attribute> operands,
-    SmallVectorImpl<RegionSuccessor> &regions) {
+    RegionBranchPoint point, SmallVectorImpl<RegionSuccessor> &regions) {
   // If the predecessor is an AffineIfOp, then branching into both `then` and
   // `else` region is valid.
-  if (!index.has_value()) {
+  if (point.isParent()) {
     regions.reserve(2);
     regions.push_back(
         RegionSuccessor(&getThenRegion(), getThenRegion().getArguments()));
-    // Don't consider the else region if it is empty.
-    if (!getElseRegion().empty())
+    // If the "else" region is empty, branch bach into parent.
+    if (getElseRegion().empty()) {
+      regions.push_back(getResults());
+    } else {
       regions.push_back(
           RegionSuccessor(&getElseRegion(), getElseRegion().getArguments()));
+    }
     return;
   }
 
@@ -3136,17 +3124,11 @@ static LogicalResult
 verifyMemoryOpIndexing(Operation *op, AffineMapAttr mapAttr,
                        Operation::operand_range mapOperands,
                        MemRefType memrefType, unsigned numIndexOperands) {
-  if (mapAttr) {
     AffineMap map = mapAttr.getValue();
     if (map.getNumResults() != memrefType.getRank())
       return op->emitOpError("affine map num results must equal memref rank");
     if (map.getNumInputs() != numIndexOperands)
       return op->emitOpError("expects as many subscripts as affine map inputs");
-  } else {
-    if (memrefType.getRank() != numIndexOperands)
-      return op->emitOpError(
-          "expects the number of subscripts to be equal to memref rank");
-  }
 
   Region *scope = getAffineScope(op);
   for (auto idx : mapOperands) {
@@ -3225,7 +3207,7 @@ void AffineStoreOp::build(OpBuilder &builder, OperationState &result,
   result.addOperands(valueToStore);
   result.addOperands(memref);
   result.addOperands(mapOperands);
-  result.addAttribute(getMapAttrStrName(), AffineMapAttr::get(map));
+  result.getOrAddProperties<Properties>().map = AffineMapAttr::get(map);
 }
 
 // Use identity map.
@@ -3855,7 +3837,9 @@ void AffineParallelOp::build(OpBuilder &builder, OperationState &result,
     ensureTerminator(*bodyRegion, builder, result.location);
 }
 
-Region &AffineParallelOp::getLoopBody() { return getRegion(); }
+SmallVector<Region *> AffineParallelOp::getLoopRegions() {
+  return {&getRegion()};
+}
 
 unsigned AffineParallelOp::getNumDims() { return getSteps().size(); }
 

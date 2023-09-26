@@ -143,6 +143,9 @@ static StringInitFailureKind IsStringInit(Expr *Init, const ArrayType *AT,
     if (IsWideCharCompatible(ElemTy, Context))
       return SIF_IncompatWideStringIntoWideChar;
     return SIF_Other;
+  case StringLiteral::Unevaluated:
+    assert(false && "Unevaluated string literal in initialization");
+    break;
   }
 
   llvm_unreachable("missed a StringLiteral kind?");
@@ -1977,7 +1980,7 @@ void InitListChecker::CheckArrayType(const InitializedEntity &Entity,
     // them in all sorts of strange places).
     bool HasErr = IList->getNumInits() != 0 || SemaRef.getLangOpts().CPlusPlus;
     if (!VerifyOnly) {
-      // C2x 6.7.9p4: An entity of variable length array type shall not be
+      // C23 6.7.10p4: An entity of variable length array type shall not be
       // initialized except by an empty initializer.
       //
       // The C extension warnings are issued from ParseBraceInitializer() and
@@ -2249,6 +2252,8 @@ void InitListChecker::CheckStructUnionTypes(
     !IList->isIdiomaticZeroInitializer(SemaRef.getLangOpts());
   bool HasDesignatedInit = false;
 
+  llvm::SmallPtrSet<FieldDecl *, 4> InitializedFields;
+
   while (Index < IList->getNumInits()) {
     Expr *Init = IList->getInit(Index);
     SourceLocation InitLoc = Init->getBeginLoc();
@@ -2264,20 +2269,23 @@ void InitListChecker::CheckStructUnionTypes(
 
       // Handle this designated initializer. Field will be updated to
       // the next field that we'll be initializing.
-      if (CheckDesignatedInitializer(Entity, IList, DIE, 0,
-                                     DeclType, &Field, nullptr, Index,
-                                     StructuredList, StructuredIndex,
-                                     true, TopLevelObject))
+      bool DesignatedInitFailed = CheckDesignatedInitializer(
+          Entity, IList, DIE, 0, DeclType, &Field, nullptr, Index,
+          StructuredList, StructuredIndex, true, TopLevelObject);
+      if (DesignatedInitFailed)
         hadError = true;
-      else if (!VerifyOnly) {
-        // Find the field named by the designated initializer.
-        RecordDecl::field_iterator F = RD->field_begin();
-        while (std::next(F) != Field)
-          ++F;
-        QualType ET = SemaRef.Context.getBaseElementType(F->getType());
-        if (checkDestructorReference(ET, InitLoc, SemaRef)) {
-          hadError = true;
-          return;
+
+      // Find the field named by the designated initializer.
+      DesignatedInitExpr::Designator *D = DIE->getDesignator(0);
+      if (!VerifyOnly && D->isFieldDesignator()) {
+        FieldDecl *F = D->getFieldDecl();
+        InitializedFields.insert(F);
+        if (!DesignatedInitFailed) {
+          QualType ET = SemaRef.Context.getBaseElementType(F->getType());
+          if (checkDestructorReference(ET, InitLoc, SemaRef)) {
+            hadError = true;
+            return;
+          }
         }
       }
 
@@ -2285,7 +2293,8 @@ void InitListChecker::CheckStructUnionTypes(
 
       // Disable check for missing fields when designators are used.
       // This matches gcc behaviour.
-      CheckForMissingFields = false;
+      if (!SemaRef.getLangOpts().CPlusPlus)
+        CheckForMissingFields = false;
       continue;
     }
 
@@ -2364,6 +2373,7 @@ void InitListChecker::CheckStructUnionTypes(
     CheckSubElementType(MemberEntity, IList, Field->getType(), Index,
                         StructuredList, StructuredIndex);
     InitializedSomething = true;
+    InitializedFields.insert(*Field);
 
     if (RD->isUnion() && StructuredList) {
       // Initialize the first field within the union.
@@ -2375,15 +2385,21 @@ void InitListChecker::CheckStructUnionTypes(
 
   // Emit warnings for missing struct field initializers.
   if (!VerifyOnly && InitializedSomething && CheckForMissingFields &&
-      Field != FieldEnd && !Field->getType()->isIncompleteArrayType() &&
       !RD->isUnion()) {
     // It is possible we have one or more unnamed bitfields remaining.
     // Find first (if any) named field and emit warning.
-    for (RecordDecl::field_iterator it = Field, end = RD->field_end();
+    for (RecordDecl::field_iterator it = HasDesignatedInit ? RD->field_begin()
+                                                           : Field,
+                                    end = RD->field_end();
          it != end; ++it) {
-      if (!it->isUnnamedBitfield() && !it->hasInClassInitializer()) {
+      if (HasDesignatedInit && InitializedFields.count(*it))
+        continue;
+
+      if (!it->isUnnamedBitfield() && !it->hasInClassInitializer() &&
+          !it->getType()->isIncompleteArrayType()) {
         SemaRef.Diag(IList->getSourceRange().getEnd(),
-                     diag::warn_missing_field_initializers) << *it;
+                     diag::warn_missing_field_initializers)
+            << *it;
         break;
       }
     }
@@ -2688,21 +2704,16 @@ InitListChecker::CheckDesignatedInitializer(const InitializedEntity &Entity,
     FieldDecl *KnownField = D->getFieldDecl();
     if (!KnownField) {
       const IdentifierInfo *FieldName = D->getFieldName();
-      DeclContext::lookup_result Lookup = RD->lookup(FieldName);
-      for (NamedDecl *ND : Lookup) {
-        if (auto *FD = dyn_cast<FieldDecl>(ND)) {
-          KnownField = FD;
-          break;
-        }
-        if (auto *IFD = dyn_cast<IndirectFieldDecl>(ND)) {
-          // In verify mode, don't modify the original.
-          if (VerifyOnly)
-            DIE = CloneDesignatedInitExpr(SemaRef, DIE);
-          ExpandAnonymousFieldDesignator(SemaRef, DIE, DesigIdx, IFD);
-          D = DIE->getDesignator(DesigIdx);
-          KnownField = cast<FieldDecl>(*IFD->chain_begin());
-          break;
-        }
+      ValueDecl *VD = SemaRef.tryLookupUnambiguousFieldDecl(RD, FieldName);
+      if (auto *FD = dyn_cast_if_present<FieldDecl>(VD)) {
+        KnownField = FD;
+      } else if (auto *IFD = dyn_cast_if_present<IndirectFieldDecl>(VD)) {
+        // In verify mode, don't modify the original.
+        if (VerifyOnly)
+          DIE = CloneDesignatedInitExpr(SemaRef, DIE);
+        ExpandAnonymousFieldDesignator(SemaRef, DIE, DesigIdx, IFD);
+        D = DIE->getDesignator(DesigIdx);
+        KnownField = cast<FieldDecl>(*IFD->chain_begin());
       }
       if (!KnownField) {
         if (VerifyOnly) {
@@ -2710,10 +2721,17 @@ InitListChecker::CheckDesignatedInitializer(const InitializedEntity &Entity,
           return true;  // No typo correction when just trying this out.
         }
 
+        // We found a placeholder variable
+        if (SemaRef.DiagRedefinedPlaceholderFieldDecl(DIE->getBeginLoc(), RD,
+                                                      FieldName)) {
+          ++Index;
+          return true;
+        }
         // Name lookup found something, but it wasn't a field.
-        if (!Lookup.empty()) {
+        if (DeclContextLookupResult Lookup = RD->lookup(FieldName);
+            !Lookup.empty()) {
           SemaRef.Diag(D->getFieldLoc(), diag::err_field_designator_nonfield)
-            << FieldName;
+              << FieldName;
           SemaRef.Diag(Lookup.front()->getLocation(),
                        diag::note_field_designator_found);
           ++Index;
@@ -2841,10 +2859,11 @@ InitListChecker::CheckDesignatedInitializer(const InitializedEntity &Entity,
 
       if (PrevField &&
           PrevField->getFieldIndex() > KnownField->getFieldIndex()) {
-        SemaRef.Diag(DIE->getBeginLoc(), diag::ext_designated_init_reordered)
+        SemaRef.Diag(DIE->getInit()->getBeginLoc(),
+                     diag::ext_designated_init_reordered)
             << KnownField << PrevField << DIE->getSourceRange();
 
-        unsigned OldIndex = NumBases + PrevField->getFieldIndex();
+        unsigned OldIndex = StructuredIndex - 1;
         if (StructuredList && OldIndex <= StructuredList->getNumInits()) {
           if (Expr *PrevInit = StructuredList->getInit(OldIndex)) {
             SemaRef.Diag(PrevInit->getBeginLoc(),
@@ -2948,8 +2967,12 @@ InitListChecker::CheckDesignatedInitializer(const InitializedEntity &Entity,
     // If this the first designator, our caller will continue checking
     // the rest of this struct/class/union subobject.
     if (IsFirstDesignator) {
+      if (Field != RD->field_end() && Field->isUnnamedBitfield())
+        ++Field;
+
       if (NextField)
         *NextField = Field;
+
       StructuredIndex = FieldIndex;
       return false;
     }
@@ -5586,7 +5609,8 @@ static void TryOrBuildParenListInitialization(
             // C++ [dcl.init]p16.6.2.2
             //   The remaining elements are initialized with their default
             //   member initializers, if any
-            ExprResult DIE = S.BuildCXXDefaultInitExpr(FD->getLocation(), FD);
+            ExprResult DIE = S.BuildCXXDefaultInitExpr(
+                Kind.getParenOrBraceRange().getEnd(), FD);
             if (DIE.isInvalid())
               return;
             S.checkInitializerLifetime(SubEntity, DIE.get());
@@ -5649,8 +5673,6 @@ static void TryOrBuildParenListInitialization(
            diag::warn_cxx17_compat_aggregate_init_paren_list)
         << Kind.getLocation() << SR << ResultType;
   }
-
-  return;
 }
 
 /// Attempt a user-defined conversion between two types (C++ [dcl.init]),
@@ -6333,6 +6355,7 @@ void InitializationSequence::InitializeFrom(Sema &S,
   // We're at the end of the line for C: it's either a write-back conversion
   // or it's a C assignment. There's no need to check anything else.
   if (!S.getLangOpts().CPlusPlus) {
+    assert(Initializer && "Initializer must be non-null");
     // If allowed, check whether this is an Objective-C writeback conversion.
     if (allowObjCWritebackConversion &&
         tryObjCWritebackConversion(S, *this, Entity, Initializer)) {
@@ -6359,7 +6382,8 @@ void InitializationSequence::InitializeFrom(Sema &S,
     if (Kind.getKind() == InitializationKind::IK_Direct ||
         (Kind.getKind() == InitializationKind::IK_Copy &&
          (Context.hasSameUnqualifiedType(SourceType, DestType) ||
-          S.IsDerivedFrom(Initializer->getBeginLoc(), SourceType, DestType)))) {
+          (Initializer && S.IsDerivedFrom(Initializer->getBeginLoc(),
+                                          SourceType, DestType))))) {
       TryConstructorInitialization(S, Entity, Kind, Args, DestType, DestType,
                                    *this);
 
@@ -6403,6 +6427,7 @@ void InitializationSequence::InitializeFrom(Sema &S,
       //       function is used) to a derived class thereof are enumerated as
       //       described in 13.3.1.4, and the best one is chosen through
       //       overload resolution (13.3).
+      assert(Initializer && "Initializer must be non-null");
       TryUserDefinedConversion(S, DestType, Kind, Initializer, *this,
                                TopLevelOfInitList);
     }
@@ -6454,6 +6479,7 @@ void InitializationSequence::InitializeFrom(Sema &S,
   //    - Otherwise, if the source type is a (possibly cv-qualified) class
   //      type, conversion functions are considered.
   if (!SourceType.isNull() && SourceType->isRecordType()) {
+    assert(Initializer && "Initializer must be non-null");
     // For a conversion to _Atomic(T) from either T or a class type derived
     // from T, initialize the T object then convert to _Atomic type.
     bool NeedAtomicConversion = false;
@@ -8279,7 +8305,7 @@ void Sema::checkInitializerLifetime(const InitializedEntity &Entity,
 
       case IndirectLocalPathEntry::DefaultInit: {
         auto *FD = cast<FieldDecl>(Elem.D);
-        Diag(FD->getLocation(), diag::note_init_with_default_member_initalizer)
+        Diag(FD->getLocation(), diag::note_init_with_default_member_initializer)
             << FD << nextPathEntryRange(Path, I + 1, L);
         break;
       }
@@ -9387,10 +9413,13 @@ ExprResult InitializationSequence::Perform(Sema &S,
     }
   }
 
+  Expr *Init = CurInit.get();
+  if (!Init)
+    return ExprError();
+
   // Check whether the initializer has a shorter lifetime than the initialized
   // entity, and if not, either lifetime-extend or warn as appropriate.
-  if (auto *Init = CurInit.get())
-    S.checkInitializerLifetime(Entity, Init);
+  S.checkInitializerLifetime(Entity, Init);
 
   // Diagnose non-fatal problems with the completed initialization.
   if (InitializedEntity::EntityKind EK = Entity.getKind();
@@ -9398,16 +9427,13 @@ ExprResult InitializationSequence::Perform(Sema &S,
        EK == InitializedEntity::EK_ParenAggInitMember) &&
       cast<FieldDecl>(Entity.getDecl())->isBitField())
     S.CheckBitFieldInitialization(Kind.getLocation(),
-                                  cast<FieldDecl>(Entity.getDecl()),
-                                  CurInit.get());
+                                  cast<FieldDecl>(Entity.getDecl()), Init);
 
   // Check for std::move on construction.
-  if (const Expr *E = CurInit.get()) {
-    CheckMoveOnConstruction(S, E,
-                            Entity.getKind() == InitializedEntity::EK_Result);
-  }
+  CheckMoveOnConstruction(S, Init,
+                          Entity.getKind() == InitializedEntity::EK_Result);
 
-  return CurInit;
+  return Init;
 }
 
 /// Somewhere within T there is an uninitialized reference subobject.
@@ -10675,7 +10701,7 @@ QualType Sema::DeduceTemplateSpecializationFromInitializer(
           TD, FoundDecl, /*ExplicitArgs=*/nullptr, TmpInits, Candidates,
           SuppressUserConversions,
           /*PartialOverloading=*/false, AllowExplicit, ADLCallKind::NotADL,
-          /*PO=*/{}, /*AggregateCandidateDeduction=*/true);
+          /*PO=*/{}, AllowAggregateDeductionCandidate);
     } else {
       AddOverloadCandidate(GD, FoundDecl, Inits, Candidates,
                            SuppressUserConversions,
@@ -10714,7 +10740,8 @@ QualType Sema::DeduceTemplateSpecializationFromInitializer(
               ElementTypes[I] = Context.getRValueReferenceType(ElementTypes[I]);
             else if (isa<StringLiteral>(
                          ListInit->getInit(I)->IgnoreParenImpCasts()))
-              ElementTypes[I] = Context.getLValueReferenceType(ElementTypes[I]);
+              ElementTypes[I] =
+                  Context.getLValueReferenceType(ElementTypes[I].withConst());
           }
 
         llvm::FoldingSetNodeID ID;
@@ -10772,7 +10799,7 @@ QualType Sema::DeduceTemplateSpecializationFromInitializer(
     //   parenthesized expression-list, and there are no deduction-guides for
     //   C, the set contains an additional function template, called the
     //   aggregate deduction candidate, defined as follows.
-    if (!HasAnyDeductionGuide) {
+    if (getLangOpts().CPlusPlus20 && !HasAnyDeductionGuide) {
       if (ListInit && ListInit->getNumInits()) {
         SynthesizeAggrGuide(ListInit);
       } else if (PL && PL->getNumExprs()) {

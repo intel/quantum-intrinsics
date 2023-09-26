@@ -116,6 +116,12 @@ static cl::opt<bool>
     SplitLTOUnit("thinlto-split-lto-unit",
                  cl::desc("Enable splitting of a ThinLTO LTOUnit"));
 
+static cl::opt<bool>
+    UnifiedLTO("unified-lto",
+               cl::desc("Use unified LTO piplines. Ignored unless -thinlto-bc "
+                        "is also specified."),
+               cl::Hidden, cl::init(false));
+
 static cl::opt<std::string> ThinLinkBitcodeFile(
     "thin-link-bitcode-file", cl::value_desc("filename"),
     cl::desc(
@@ -143,34 +149,32 @@ static cl::opt<bool>
     StripNamedMetadata("strip-named-metadata",
                        cl::desc("Strip module-level named metadata"));
 
-
-
 static cl::opt<bool>
     OptLevelO0("O0", cl::desc("Optimization level 0. Similar to clang -O0. "
-                              "Use -passes='default<O0>' for the new PM"));
+                              "Same as -passes='default<O0>'"));
 
 static cl::opt<bool>
     OptLevelO1("O1", cl::desc("Optimization level 1. Similar to clang -O1. "
-                              "Use -passes='default<O1>' for the new PM"));
+                              "Same as -passes='default<O1>'"));
 
 static cl::opt<bool>
     OptLevelO2("O2", cl::desc("Optimization level 2. Similar to clang -O2. "
-                              "Use -passes='default<O2>' for the new PM"));
+                              "Same as -passes='default<O2>'"));
 
 static cl::opt<bool>
     OptLevelOs("Os", cl::desc("Like -O2 but size-conscious. Similar to clang "
-                              "-Os. Use -passes='default<Os>' for the new PM"));
+                              "-Os. Same as -passes='default<Os>'"));
 
 static cl::opt<bool> OptLevelOz(
     "Oz",
     cl::desc("Like -O2 but optimize for code size above all else. Similar to "
-             "clang -Oz. Use -passes='default<Oz>' for the new PM"));
+             "clang -Oz. Same as -passes='default<Oz>'"));
 
 static cl::opt<bool>
     OptLevelO3("O3", cl::desc("Optimization level 3. Similar to clang -O3. "
-                              "Use -passes='default<O3>' for the new PM"));
+                              "Same as -passes='default<O3>'"));
 
-static cl::opt<unsigned> CodeGenOptLevel(
+static cl::opt<unsigned> CodeGenOptLevelCL(
     "codegen-opt-level",
     cl::desc("Override optimization level for codegen hooks, legacy PM only"));
 
@@ -278,8 +282,8 @@ static cl::list<std::string>
 // CodeGen-related helper functions.
 //
 
-static CodeGenOpt::Level GetCodeGenOptLevel() {
-  return static_cast<CodeGenOpt::Level>(unsigned(CodeGenOptLevel));
+static CodeGenOptLevel GetCodeGenOptLevel() {
+  return static_cast<CodeGenOptLevel>(unsigned(CodeGenOptLevelCL));
 }
 
 // Returns the TargetMachine instance or zero if no triple is provided.
@@ -564,9 +568,14 @@ int main(int argc, char **argv) {
   // the facility for updating public visibility to linkage unit visibility when
   // specified by an internal option. This is normally done during LTO which is
   // not performed via opt.
-  updateVCallVisibilityInModule(*M,
-                                /* WholeProgramVisibilityEnabledInLTO */ false,
-                                /* DynamicExportSymbols */ {});
+  updateVCallVisibilityInModule(
+      *M,
+      /*WholeProgramVisibilityEnabledInLTO=*/false,
+      // FIXME: These need linker information via a
+      // TBD new interface.
+      /*DynamicExportSymbols=*/{},
+      /*ValidateAllVtablesHaveTypeInfos=*/false,
+      /*IsVisibleToRegularObj=*/[](StringRef) { return true; });
 
   // Figure out what stream we are supposed to write to...
   std::unique_ptr<ToolOutputFile> Out;
@@ -629,8 +638,11 @@ int main(int argc, char **argv) {
     if (CheckBitcodeOutputToConsole(Out->os()))
       NoOutput = true;
 
-  if (OutputThinLTOBC)
+  if (OutputThinLTOBC) {
     M->addModuleFlag(Module::Error, "EnableSplitLTOUnit", SplitLTOUnit);
+    if (UnifiedLTO)
+      M->addModuleFlag(Module::Error, "UnifiedLTO", 1);
+  }
 
   // Add an appropriate TargetLibraryInfo pass for the module's triple.
   TargetLibraryInfoImpl TLII(ModuleTriple);
@@ -702,7 +714,7 @@ int main(int argc, char **argv) {
                            PluginList, OK, VK, PreserveAssemblyUseListOrder,
                            PreserveBitcodeUseListOrder, EmitSummaryIndex,
                            EmitModuleHash, EnableDebugify,
-                           VerifyDebugInfoPreserve)
+                           VerifyDebugInfoPreserve, UnifiedLTO)
                ? 0
                : 1;
   }

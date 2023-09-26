@@ -31,6 +31,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/DynamicType.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
+#include "llvm/ADT/STLExtras.h"
 #include <optional>
 
 using namespace clang;
@@ -233,11 +234,9 @@ void DynamicTypePropagation::checkDeadSymbols(SymbolReaper &SR,
 
   MostSpecializedTypeArgsMapTy TyArgMap =
       State->get<MostSpecializedTypeArgsMap>();
-  for (MostSpecializedTypeArgsMapTy::iterator I = TyArgMap.begin(),
-                                              E = TyArgMap.end();
-       I != E; ++I) {
-    if (SR.isDead(I->first)) {
-      State = State->remove<MostSpecializedTypeArgsMap>(I->first);
+  for (SymbolRef Sym : llvm::make_first_range(TyArgMap)) {
+    if (SR.isDead(Sym)) {
+      State = State->remove<MostSpecializedTypeArgsMap>(Sym);
     }
   }
 
@@ -714,7 +713,7 @@ static bool isObjCTypeParamDependent(QualType Type) {
   class IsObjCTypeParamDependentTypeVisitor
       : public RecursiveASTVisitor<IsObjCTypeParamDependentTypeVisitor> {
   public:
-    IsObjCTypeParamDependentTypeVisitor() : Result(false) {}
+    IsObjCTypeParamDependentTypeVisitor() = default;
     bool VisitObjCTypeParamType(const ObjCTypeParamType *Type) {
       if (isa<ObjCTypeParamDecl>(Type->getDecl())) {
         Result = true;
@@ -723,7 +722,7 @@ static bool isObjCTypeParamDependent(QualType Type) {
       return true;
     }
 
-    bool Result;
+    bool Result = false;
   };
 
   IsObjCTypeParamDependentTypeVisitor Visitor;

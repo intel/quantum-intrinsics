@@ -32,6 +32,12 @@ class RankedTensorType;
 class StringAttr;
 class TypeRange;
 
+namespace detail {
+struct FunctionTypeStorage;
+struct IntegerTypeStorage;
+struct TupleTypeStorage;
+} // namespace detail
+
 //===----------------------------------------------------------------------===//
 // FloatType
 //===----------------------------------------------------------------------===//
@@ -44,6 +50,7 @@ public:
   static FloatType getBF16(MLIRContext *ctx);
   static FloatType getF16(MLIRContext *ctx);
   static FloatType getF32(MLIRContext *ctx);
+  static FloatType getTF32(MLIRContext *ctx);
   static FloatType getF64(MLIRContext *ctx);
   static FloatType getF80(MLIRContext *ctx);
   static FloatType getF128(MLIRContext *ctx);
@@ -60,6 +67,7 @@ public:
   unsigned getWidth();
 
   /// Return the width of the mantissa of this type.
+  /// The width includes the integer bit.
   unsigned getFPMantissaWidth();
 
   /// Get or create a new FloatType with bitwidth scaled by `scale`.
@@ -349,12 +357,17 @@ public:
     return *this;
   }
 
-  /// In the particular case where the vector has a single dimension that we
-  /// drop, return the scalar element type.
-  // TODO: unify once we have a VectorType that supports 0-D.
-  operator Type() {
-    if (shape.empty())
-      return elementType;
+  /// Set a dim in shape @pos to val.
+  Builder &setDim(unsigned pos, int64_t val) {
+    if (storage.empty())
+      storage.append(shape.begin(), shape.end());
+    assert(pos < storage.size() && "overflow");
+    storage[pos] = val;
+    shape = {storage.data(), storage.size()};
+    return *this;
+  }
+
+  operator VectorType() {
     return VectorType::get(shape, elementType, scalableDims);
   }
 
@@ -417,8 +430,8 @@ inline bool BaseMemRefType::isValidElementType(Type type) {
 inline bool FloatType::classof(Type type) {
   return llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
                    Float8E4M3FNUZType, Float8E4M3B11FNUZType, BFloat16Type,
-                   Float16Type, Float32Type, Float64Type, Float80Type,
-                   Float128Type>(type);
+                   Float16Type, FloatTF32Type, Float32Type, Float64Type,
+                   Float80Type, Float128Type>(type);
 }
 
 inline FloatType FloatType::getFloat8E5M2(MLIRContext *ctx) {
@@ -447,6 +460,10 @@ inline FloatType FloatType::getBF16(MLIRContext *ctx) {
 
 inline FloatType FloatType::getF16(MLIRContext *ctx) {
   return Float16Type::get(ctx);
+}
+
+inline FloatType FloatType::getTF32(MLIRContext *ctx) {
+  return FloatTF32Type::get(ctx);
 }
 
 inline FloatType FloatType::getF32(MLIRContext *ctx) {
@@ -504,7 +521,7 @@ MemRefType canonicalizeStridedLayout(MemRefType t);
 /// canonical "contiguous" strides AffineExpr. Strides are multiplicative and
 /// once a dynamic dimension is encountered, all canonical strides become
 /// dynamic and need to be encoded with a different symbol.
-/// For canonical strides expressions, the offset is always 0 and and fastest
+/// For canonical strides expressions, the offset is always 0 and the fastest
 /// varying stride is always `1`.
 ///
 /// Examples:
@@ -523,8 +540,12 @@ AffineExpr makeCanonicalStridedLayoutExpr(ArrayRef<int64_t> sizes,
 AffineExpr makeCanonicalStridedLayoutExpr(ArrayRef<int64_t> sizes,
                                           MLIRContext *context);
 
-/// Return true if the layout for `t` is compatible with strided semantics.
+/// Return "true" if the layout for `t` is compatible with strided semantics.
 bool isStrided(MemRefType t);
+
+/// Return "true" if the last dimension of the given type has a static unit
+/// stride. Also return "true" for types with no strides.
+bool isLastMemrefDimUnitStride(MemRefType type);
 
 } // namespace mlir
 

@@ -76,7 +76,7 @@ bool isInstructionTriviallyDead(Instruction *I,
 /// Return true if the result produced by the instruction would have no side
 /// effects if it was not used. This is equivalent to checking whether
 /// isInstructionTriviallyDead would be true if the use count was 0.
-bool wouldInstructionBeTriviallyDead(Instruction *I,
+bool wouldInstructionBeTriviallyDead(const Instruction *I,
                                      const TargetLibraryInfo *TLI = nullptr);
 
 /// Return true if the result produced by the instruction has no side effects on
@@ -156,16 +156,23 @@ void MergeBasicBlockIntoOnlyPred(BasicBlock *BB, DomTreeUpdater *DTU = nullptr);
 /// other than PHI nodes, potential debug intrinsics and the branch. If
 /// possible, eliminate BB by rewriting all the predecessors to branch to the
 /// successor block and return true. If we can't transform, return false.
-/// If a RemoveInsts set is specified, the block may additionally contain these
-/// instructions, which will be removed as part of the transform.
-bool TryToSimplifyUncondBranchFromEmptyBlock(
-    BasicBlock *BB, DomTreeUpdater *DTU = nullptr,
-    const SmallPtrSetImpl<const Instruction *> *RemoveInsts = nullptr);
+bool TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
+                                             DomTreeUpdater *DTU = nullptr);
 
 /// Check for and eliminate duplicate PHI nodes in this block. This doesn't try
 /// to be clever about PHI nodes which differ only in the order of the incoming
 /// values, but instcombine orders them so it usually won't matter.
+///
+/// This overload removes the duplicate PHI nodes directly.
 bool EliminateDuplicatePHINodes(BasicBlock *BB);
+
+/// Check for and eliminate duplicate PHI nodes in this block. This doesn't try
+/// to be clever about PHI nodes which differ only in the order of the incoming
+/// values, but instcombine orders them so it usually won't matter.
+///
+/// This overload collects the PHI nodes to be removed into the ToRemove set.
+bool EliminateDuplicatePHINodes(BasicBlock *BB,
+                                SmallPtrSetImpl<PHINode *> &ToRemove);
 
 /// This function is used to do simplification of a CFG.  For example, it
 /// adjusts branches to branches to eliminate the extra hop, it eliminates
@@ -205,6 +212,15 @@ AllocaInst *DemoteRegToStack(Instruction &X,
 /// it with a slot in the stack frame, allocated via alloca. The phi node is
 /// deleted and it returns the pointer to the alloca inserted.
 AllocaInst *DemotePHIToStack(PHINode *P, Instruction *AllocaPoint = nullptr);
+
+/// If the specified pointer points to an object that we control, try to modify
+/// the object's alignment to PrefAlign. Returns a minimum known alignment of
+/// the value after the operation, which may be lower than PrefAlign.
+///
+/// Increating value alignment isn't often possible though. If alignment is
+/// important, a more reliable approach is to simply align all global variables
+/// and allocation instructions to their preferred alignment from the beginning.
+Align tryEnforceAlignment(Value *V, Align PrefAlign, const DataLayout &DL);
 
 /// Try to ensure that the alignment of \p V is at least \p PrefAlign bytes. If
 /// the owning object can be modified and has an alignment less than \p

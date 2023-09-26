@@ -17,19 +17,24 @@
 #define LLVM_CLANG_AST_INTERP_CONTEXT_H
 
 #include "InterpStack.h"
-#include "clang/AST/APValue.h"
 
 namespace clang {
 class ASTContext;
 class LangOptions;
 class FunctionDecl;
 class VarDecl;
+class APValue;
 
 namespace interp {
 class Function;
 class Program;
 class State;
 enum PrimType : unsigned;
+
+struct ParamOffset {
+  unsigned Offset;
+  bool IsPtr;
+};
 
 /// Holds all information required to evaluate constexpr code in a module.
 class Context final {
@@ -68,9 +73,20 @@ public:
                         const CXXRecordDecl *StaticDecl,
                         const CXXMethodDecl *InitialFunction) const;
 
+  const Function *getOrCreateFunction(const FunctionDecl *FD);
+
+  /// Returns whether we should create a global variable for the
+  /// given ValueDecl.
+  static bool shouldBeGloballyIndexed(const ValueDecl *VD) {
+    if (const auto *V = dyn_cast<VarDecl>(VD))
+      return V->hasGlobalStorage() || V->isConstexpr();
+
+    return false;
+  }
+
 private:
   /// Runs a function.
-  bool Run(State &Parent, Function *Func, APValue &Result);
+  bool Run(State &Parent, const Function *Func, APValue &Result);
 
   /// Checks a result from the interpreter.
   bool Check(State &Parent, llvm::Expected<bool> &&R);

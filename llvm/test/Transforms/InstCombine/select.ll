@@ -960,7 +960,7 @@ define void @test64(i32 %p, i16 %b, i1 %c1) noreturn {
 ; CHECK:       lor.rhs:
 ; CHECK-NEXT:    br label [[LOR_END]]
 ; CHECK:       lor.end:
-; CHECK-NEXT:    br i1 true, label [[COND_END17:%.*]], label [[COND_FALSE16:%.*]]
+; CHECK-NEXT:    br i1 poison, label [[COND_END17:%.*]], label [[COND_FALSE16:%.*]]
 ; CHECK:       cond.false16:
 ; CHECK-NEXT:    br label [[COND_END17]]
 ; CHECK:       cond.end17:
@@ -1212,8 +1212,8 @@ define ptr @test83(i1 %flag) {
 ; CHECK-NEXT:    [[Y:%.*]] = alloca i64, align 8
 ; CHECK-NEXT:    call void @scribble_on_i64(ptr nonnull [[X]])
 ; CHECK-NEXT:    call void @scribble_on_i64(ptr nonnull [[Y]])
-; CHECK-NEXT:    [[T:%.*]] = load i64, ptr [[X]], align 8
-; CHECK-NEXT:    store i64 [[T]], ptr [[Y]], align 8
+; CHECK-NEXT:    [[T:%.*]] = load i64, ptr [[X]], align 4
+; CHECK-NEXT:    store i64 [[T]], ptr [[Y]], align 4
 ; CHECK-NEXT:    [[V:%.*]] = inttoptr i64 [[T]] to ptr
 ; CHECK-NEXT:    ret ptr [[V]]
 ;
@@ -1261,8 +1261,8 @@ define ptr @test85(i1 %flag) {
 ; CHECK-NEXT:    [[Y:%.*]] = alloca i128, align 8
 ; CHECK-NEXT:    call void @scribble_on_i128(ptr nonnull [[X]])
 ; CHECK-NEXT:    call void @scribble_on_i128(ptr nonnull [[Y]])
-; CHECK-NEXT:    [[T:%.*]] = load i128, ptr [[X]], align 8
-; CHECK-NEXT:    store i128 [[T]], ptr [[Y]], align 8
+; CHECK-NEXT:    [[T:%.*]] = load i128, ptr [[X]], align 4
+; CHECK-NEXT:    store i128 [[T]], ptr [[Y]], align 4
 ; CHECK-NEXT:    [[X_VAL:%.*]] = load ptr, ptr [[X]], align 8
 ; CHECK-NEXT:    [[Y_VAL:%.*]] = load ptr, ptr [[Y]], align 8
 ; CHECK-NEXT:    [[V:%.*]] = select i1 [[FLAG:%.*]], ptr [[X_VAL]], ptr [[Y_VAL]]
@@ -1290,8 +1290,8 @@ define i128 @test86(i1 %flag) {
 ; CHECK-NEXT:    call void @scribble_on_i128(ptr nonnull [[Y]])
 ; CHECK-NEXT:    [[T:%.*]] = load ptr, ptr [[X]], align 8
 ; CHECK-NEXT:    store ptr [[T]], ptr [[Y]], align 8
-; CHECK-NEXT:    [[X_VAL:%.*]] = load i128, ptr [[X]], align 8
-; CHECK-NEXT:    [[Y_VAL:%.*]] = load i128, ptr [[Y]], align 8
+; CHECK-NEXT:    [[X_VAL:%.*]] = load i128, ptr [[X]], align 4
+; CHECK-NEXT:    [[Y_VAL:%.*]] = load i128, ptr [[Y]], align 4
 ; CHECK-NEXT:    [[V:%.*]] = select i1 [[FLAG:%.*]], i128 [[X_VAL]], i128 [[Y_VAL]]
 ; CHECK-NEXT:    ret i128 [[V]]
 ;
@@ -2892,10 +2892,9 @@ define i32 @select_replacement_loop2(i32 %arg, i32 %arg2) {
   ret i32 %sel
 }
 
-; TODO: Dropping the inbounds flag should not be necessary for this fold.
 define ptr @select_replacement_gep_inbounds(ptr %base, i64 %offset) {
 ; CHECK-LABEL: @select_replacement_gep_inbounds(
-; CHECK-NEXT:    [[GEP:%.*]] = getelementptr i8, ptr [[BASE:%.*]], i64 [[OFFSET:%.*]]
+; CHECK-NEXT:    [[GEP:%.*]] = getelementptr inbounds i8, ptr [[BASE:%.*]], i64 [[OFFSET:%.*]]
 ; CHECK-NEXT:    ret ptr [[GEP]]
 ;
   %cmp = icmp eq i64 %offset, 0

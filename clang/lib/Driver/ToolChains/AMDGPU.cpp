@@ -551,7 +551,11 @@ void amdgpu::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   std::string Linker = getToolChain().GetProgramPath(getShortName());
   ArgStringList CmdArgs;
+  CmdArgs.push_back("--no-undefined");
+  CmdArgs.push_back("-shared");
+
   addLinkerCompressDebugSectionsOption(getToolChain(), Args, CmdArgs);
+  Args.AddAllArgs(CmdArgs, options::OPT_L);
   AddLinkerInputs(getToolChain(), Inputs, Args, CmdArgs, JA);
   if (C.getDriver().isUsingLTO())
     addLTOOptions(getToolChain(), Args, CmdArgs, Output, Inputs[0],
@@ -559,8 +563,6 @@ void amdgpu::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   else if (Args.hasArg(options::OPT_mcpu_EQ))
     CmdArgs.push_back(Args.MakeArgString(
         "-plugin-opt=mcpu=" + Args.getLastArgValue(options::OPT_mcpu_EQ)));
-  CmdArgs.push_back("--no-undefined");
-  CmdArgs.push_back("-shared");
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
   C.addCommand(std::make_unique<Command>(
@@ -633,6 +635,27 @@ AMDGPUToolChain::TranslateArgs(const DerivedArgList &Args, StringRef BoundArch,
 
   for (Arg *A : Args)
     DAL->append(A);
+
+  // Replace -mcpu=native with detected GPU.
+  Arg *LastMCPUArg = DAL->getLastArg(options::OPT_mcpu_EQ);
+  if (LastMCPUArg && StringRef(LastMCPUArg->getValue()) == "native") {
+    DAL->eraseArg(options::OPT_mcpu_EQ);
+    auto GPUsOrErr = getSystemGPUArchs(Args);
+    if (!GPUsOrErr) {
+      getDriver().Diag(diag::err_drv_undetermined_gpu_arch)
+          << llvm::Triple::getArchTypeName(getArch())
+          << llvm::toString(GPUsOrErr.takeError()) << "-mcpu";
+    } else {
+      auto &GPUs = *GPUsOrErr;
+      if (GPUs.size() > 1) {
+        getDriver().Diag(diag::warn_drv_multi_gpu_arch)
+            << llvm::Triple::getArchTypeName(getArch())
+            << llvm::join(GPUs, ", ") << "-mcpu";
+      }
+      DAL->AddJoinedArg(nullptr, Opts.getOption(options::OPT_mcpu_EQ),
+                        Args.MakeArgString(GPUs.front()));
+    }
+  }
 
   checkTargetID(*DAL);
 

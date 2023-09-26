@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIBC_SRC_SUPPORT_STRING_UTIL_TABLES_STDC_SIGNALS_H
-#define LLVM_LIBC_SRC_SUPPORT_STRING_UTIL_TABLES_STDC_SIGNALS_H
+#ifndef LLVM_LIBC_SRC___SUPPORT_STRING_UTIL_TABLES_STDC_SIGNALS_H
+#define LLVM_LIBC_SRC___SUPPORT_STRING_UTIL_TABLES_STDC_SIGNALS_H
 
 #include <signal.h> // For signal numbers
 
@@ -15,7 +15,7 @@
 
 namespace __llvm_libc {
 
-inline constexpr const MsgTable<6> STDC_SIGNALS = {
+LIBC_INLINE_VAR constexpr const MsgTable<6> STDC_SIGNALS = {
     MsgMapping(SIGINT, "Interrupt"),
     MsgMapping(SIGILL, "Illegal instruction"),
     MsgMapping(SIGABRT, "Aborted"),
@@ -26,4 +26,4 @@ inline constexpr const MsgTable<6> STDC_SIGNALS = {
 
 } // namespace __llvm_libc
 
-#endif // LLVM_LIBC_SRC_SUPPORT_STRING_UTIL_TABLES_LINUX_SIGNALS_H
+#endif // LLVM_LIBC_SRC___SUPPORT_STRING_UTIL_TABLES_LINUX_SIGNALS_H

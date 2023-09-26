@@ -807,7 +807,7 @@ AsmParser::AsmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
     PlatformParser.reset(createXCOFFAsmParser());
     break;
   case MCContext::IsDXContainer:
-    llvm_unreachable("DXContainer is not supported yet");
+    report_fatal_error("DXContainer is not supported yet");
     break;
   }
 
@@ -1999,20 +1999,12 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
 
     getTargetParser().flushPendingInstructions(getStreamer());
 
-    SMLoc StartTokLoc = getTok().getLoc();
-    bool TPDirectiveReturn = getTargetParser().ParseDirective(ID);
-
-    if (hasPendingError())
+    ParseStatus TPDirectiveReturn = getTargetParser().parseDirective(ID);
+    assert(TPDirectiveReturn.isFailure() == hasPendingError() &&
+           "Should only return Failure iff there was an error");
+    if (TPDirectiveReturn.isFailure())
       return true;
-    // Currently the return value should be true if we are
-    // uninterested but as this is at odds with the standard parsing
-    // convention (return true = error) we have instances of a parsed
-    // directive that fails returning true as an error. Catch these
-    // cases as best as possible errors here.
-    if (TPDirectiveReturn && StartTokLoc != getTok().getLoc())
-      return true;
-    // Return if we did some parsing or believe we succeeded.
-    if (!TPDirectiveReturn || StartTokLoc != getTok().getLoc())
+    if (TPDirectiveReturn.isSuccess())
       return false;
 
     // Next, check the extension directive map to see if any extension has
@@ -3400,6 +3392,7 @@ bool AsmParser::parseDirectiveAlign(bool IsPow2, unsigned ValueSize) {
   bool HasFillExpr = false;
   int64_t FillExpr = 0;
   int64_t MaxBytesToFill = 0;
+  SMLoc FillExprLoc;
 
   auto parseAlign = [&]() -> bool {
     if (parseAbsoluteExpression(Alignment))
@@ -3410,7 +3403,7 @@ bool AsmParser::parseDirectiveAlign(bool IsPow2, unsigned ValueSize) {
       //  .align 3,,4
       if (getTok().isNot(AsmToken::Comma)) {
         HasFillExpr = true;
-        if (parseAbsoluteExpression(FillExpr))
+        if (parseTokenLoc(FillExprLoc) || parseAbsoluteExpression(FillExpr))
           return true;
       }
       if (parseOptionalToken(AsmToken::Comma))
@@ -3456,6 +3449,17 @@ bool AsmParser::parseDirectiveAlign(bool IsPow2, unsigned ValueSize) {
     if (!isUInt<32>(Alignment)) {
       ReturnVal |= Error(AlignmentLoc, "alignment must be smaller than 2**32");
       Alignment = 1u << 31;
+    }
+  }
+
+  if (HasFillExpr) {
+    MCSection *Sec = getStreamer().getCurrentSectionOnly();
+    if (Sec && Sec->isVirtualSection()) {
+      ReturnVal |=
+          Warning(FillExprLoc, "ignoring non-zero fill value in " +
+                                   Sec->getVirtualSectionKind() + " section '" +
+                                   Sec->getName() + "'");
+      FillExpr = 0;
     }
   }
 

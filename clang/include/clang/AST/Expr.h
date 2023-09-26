@@ -566,7 +566,7 @@ public:
                                       SmallVectorImpl<
                                         PartialDiagnosticAt> &Diags);
 
-  /// isPotentialConstantExprUnevaluted - Return true if this expression might
+  /// isPotentialConstantExprUnevaluated - Return true if this expression might
   /// be usable in a constant expression in C++11 in an unevaluated context, if
   /// it were in function FD marked constexpr. Return false if the function can
   /// never produce a constant expression, along with diagnostics describing
@@ -761,6 +761,11 @@ public:
   /// Returns true if all of the above holds and we were able to figure out the
   /// strlen, false otherwise.
   bool tryEvaluateStrLen(uint64_t &Result, ASTContext &Ctx) const;
+
+  bool EvaluateCharRangeAsString(std::string &Result,
+                                 const Expr *SizeExpression,
+                                 const Expr *PtrExpression, ASTContext &Ctx,
+                                 EvalResult &Status) const;
 
   /// Enumeration used to describe the kind of Null pointer constant
   /// returned from \c isNullPointerConstant().
@@ -1804,7 +1809,7 @@ class StringLiteral final
   /// * An array of getByteLength() char used to store the string data.
 
 public:
-  enum StringKind { Ordinary, Wide, UTF8, UTF16, UTF32 };
+  enum StringKind { Ordinary, Wide, UTF8, UTF16, UTF32, Unevaluated };
 
 private:
   unsigned numTrailingObjects(OverloadToken<unsigned>) const { return 1; }
@@ -1866,7 +1871,7 @@ public:
                                     unsigned CharByteWidth);
 
   StringRef getString() const {
-    assert(getCharByteWidth() == 1 &&
+    assert((isUnevaluated() || getCharByteWidth() == 1) &&
            "This function is used in places that assume strings use char");
     return StringRef(getStrDataAsChar(), getByteLength());
   }
@@ -1906,6 +1911,7 @@ public:
   bool isUTF8() const { return getKind() == UTF8; }
   bool isUTF16() const { return getKind() == UTF16; }
   bool isUTF32() const { return getKind() == UTF32; }
+  bool isUnevaluated() const { return getKind() == Unevaluated; }
   bool isPascal() const { return StringLiteralBits.IsPascal; }
 
   bool containsNonAscii() const {
@@ -2335,7 +2341,7 @@ public:
   }
 
 protected:
-  /// Set FPFeatures in trailing storage, used only by Serialization
+  /// Set FPFeatures in trailing storage, used by Serialization & ASTImporter.
   void setStoredFPFeatures(FPOptionsOverride F) { getTrailingFPFeatures() = F; }
 
 public:
@@ -2353,6 +2359,7 @@ public:
   }
 
   friend TrailingObjects;
+  friend class ASTNodeImporter;
   friend class ASTReader;
   friend class ASTStmtReader;
   friend class ASTStmtWriter;
@@ -3599,6 +3606,19 @@ public:
     if (hasStoredFPFeatures())
       return getStoredFPFeatures();
     return FPOptionsOverride();
+  }
+
+  /// Return
+  //  True : if this conversion changes the volatile-ness of a gl-value.
+  //         Qualification conversions on gl-values currently use CK_NoOp, but
+  //         it's important to recognize volatile-changing conversions in
+  //         clients code generation that normally eagerly peephole loads. Note
+  //         that the query is answering for this specific node; Sema may
+  //         produce multiple cast nodes for any particular conversion sequence.
+  //  False : Otherwise.
+  bool changesVolatileQualification() const {
+    return (isGLValue() && (getType().isVolatileQualified() !=
+                            getSubExpr()->getType().isVolatileQualified()));
   }
 
   static const FieldDecl *getTargetFieldForToUnionCast(QualType unionType,
@@ -6355,11 +6375,11 @@ public:
     return getSubExprsBuffer() + getNumSubExprs();
   }
 
-  llvm::iterator_range<semantics_iterator> semantics() {
-    return llvm::make_range(semantics_begin(), semantics_end());
+  ArrayRef<Expr*> semantics() {
+    return ArrayRef(semantics_begin(), semantics_end());
   }
-  llvm::iterator_range<const_semantics_iterator> semantics() const {
-    return llvm::make_range(semantics_begin(), semantics_end());
+  ArrayRef<const Expr*> semantics() const {
+    return ArrayRef(semantics_begin(), semantics_end());
   }
 
   Expr *getSemanticExpr(unsigned index) {
@@ -6473,6 +6493,16 @@ public:
   QualType getValueType() const;
 
   AtomicOp getOp() const { return Op; }
+  StringRef getOpAsString() const {
+    switch (Op) {
+#define BUILTIN(ID, TYPE, ATTRS)
+#define ATOMIC_BUILTIN(ID, TYPE, ATTRS)                                        \
+  case AO##ID:                                                                 \
+    return #ID;
+#include "clang/Basic/Builtins.def"
+    }
+    llvm_unreachable("not an atomic operator?");
+  }
   unsigned getNumSubExprs() const { return NumSubExprs; }
 
   Expr **getSubExprs() { return reinterpret_cast<Expr **>(SubExprs); }

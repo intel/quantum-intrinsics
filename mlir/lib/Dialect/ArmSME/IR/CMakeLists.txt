@@ -6,9 +6,13 @@ add_mlir_dialect_library(MLIRArmSMEDialect
 
   DEPENDS
   MLIRArmSMEIncGen
+  MLIRArmSMEAttrDefsIncGen
 
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRLLVMDialect
+  MLIRMemRefDialect
+  MLIRSCFDialect
   MLIRSideEffectInterfaces
+  MLIRVectorDialect
 )
