@@ -32,13 +32,13 @@ pyjwt[crypto]==2.5.0
     # via pygithub
 pynacl==1.5.0
     # via pygithub
-requests==2.28.1
+requests==2.31.0
     # via pygithub
 smmap==5.0.0
     # via gitdb
 types-cryptography==3.3.23.2
     # via pyjwt
-urllib3==1.26.12
+urllib3==1.26.18
     # via requests
 wrapt==1.14.1
     # via deprecated
