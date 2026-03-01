@@ -19,7 +19,7 @@ ninja -C . install
 Much of the information that's helpful to use and develop with LLVM is helpful for our compiler as well, but this is some frequently useful advice.
 
 ### Debugging
-In order to to get full debug information and assertions, pass the `-DCMAKE_BUILD_TYPE=Debug` rather than `Release`.
+In order to get full debug information and assertions, pass the `-DCMAKE_BUILD_TYPE=Debug` rather than `Release`.
 
 In order to get "print debugging" for LLVM classes through the `.dump()` method, include `-DLLVM_ENABLE_DUMP=On` to the cmake invocation.
 
